@@ -1,0 +1,4 @@
+node_modules/
+jupplies.db
+.claude/
+*.log

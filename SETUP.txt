@@ -1,0 +1,72 @@
+╔══════════════════════════════════════════════════════════════╗
+║              JUPPLIES REPORTS — GUÍA DE INSTALACIÓN          ║
+╚══════════════════════════════════════════════════════════════╝
+
+INSTALACIÓN (una sola vez)
+══════════════════════════
+
+PASO 1: Instalar Node.js
+  1. Ir a: https://nodejs.org
+  2. Hacer click en el botón verde "LTS" (la versión estable)
+  3. Descargar e instalar siguiendo los pasos del instalador
+  4. Reiniciar la computadora si lo pide
+
+PASO 2: Arrancar la app
+  1. Abrir la carpeta "jupplies-reports"
+  2. Hacer doble-click en "start.bat"
+  3. La primera vez va a instalar las dependencias (~2 minutos)
+  4. El browser se abre automáticamente en http://localhost:3000
+
+USO DIARIO
+══════════
+  - Doble-click en "start.bat" para arrancar
+  - El browser se abre solo
+  - Mantener la ventana negra (terminal) abierta mientras usás la app
+  - Para cerrar: cerrar la ventana negra o presionar Ctrl+C
+
+USUARIO Y CONTRASEÑA POR DEFECTO
+══════════════════════════════════
+  Usuario:    admin
+  Contraseña: jupplies2024
+  (cambiarlo en Configuración → Acceso)
+
+BACKUP DE DATOS
+═══════════════
+  Todos los datos viven en un solo archivo: jupplies.db
+  Para hacer backup, simplemente copiar ese archivo a otro lugar.
+  Para restaurar, reemplazar jupplies.db con la copia de backup.
+
+ACCESO DESDE OTRA COMPUTADORA (ej: Mac del jefe)
+══════════════════════════════════════════════════
+  Opción A — Red local (misma WiFi):
+    1. Encontrar la IP de esta PC: Abrir cmd.exe, escribir "ipconfig"
+       Buscar "Dirección IPv4", algo como 192.168.1.105
+    2. El jefe abre en su Mac: http://192.168.1.105:3000
+
+  Opción B — Cualquier lugar del mundo (con ngrok):
+    1. Descargar ngrok desde: https://ngrok.com/download
+    2. Extraer el archivo ngrok.exe en esta misma carpeta
+    3. Abrir cmd.exe en esta carpeta y ejecutar: ngrok http 3000
+    4. ngrok muestra una URL tipo: https://abc123.ngrok-free.app
+    5. Mandar esa URL al jefe — puede acceder desde cualquier lugar
+    NOTA: La URL de ngrok cambia cada vez que reiniciás ngrok (plan gratis)
+
+CONFIGURACIÓN WINDSOR
+══════════════════════
+  1. Abrir la app
+  2. Ir a Configuración (ícono ⚙️ en el sidebar)
+  3. Pegar el API Key de Windsor
+  4. Guardar
+
+IMPORTAR SKUs DESDE APP ANTERIOR
+══════════════════════════════════
+  1. En la app HTML anterior, hacer click en "Export CSV" en la sección DB
+  2. En la nueva app, ir a "Base SKUs" → "Importar CSV"
+  3. Seleccionar el archivo exportado → listo
+
+SOPORTE
+═══════
+  Si algo no funciona, verificar:
+  - Que Node.js está instalado (abrir cmd.exe y escribir "node --version")
+  - Que la ventana negra (start.bat) está abierta
+  - Que la API key de Windsor está configurada en Configuración

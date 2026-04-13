@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jupplies Reports</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ─── Sidebar ─────────────────────────────────────── -->
+<nav id="sidebar">
+  <div class="logo">
+    <div class="logo-wordmark">
+      <span class="logo-arrow">◄</span>
+      <span class="logo-text">UPPLIES</span>
+    </div>
+    <div class="logo-sub">Reports</div>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">Herramientas</div>
+    <div class="nav-item" data-page="calc">
+      <span class="icon">🧮</span> Calculadora
+    </div>
+    <div class="nav-item" data-page="skus">
+      <span class="icon">📦</span> Base SKUs
+    </div>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">Shopify</div>
+    <div class="nav-item" data-page="history">
+      <span class="icon">📈</span> Dashboard
+    </div>
+    <div class="nav-item active" data-page="daily">
+      <span class="icon">📊</span> Reporte del día
+    </div>
+    <div class="nav-item" data-page="cod">
+      <span class="icon">🚚</span> Seguim. COD
+    </div>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">TikTok Shop</div>
+    <div class="nav-item" data-page="tts">
+      <span class="icon">🛒</span> Reporte TTS
+    </div>
+    <div class="nav-item" data-page="tts-history">
+      <span class="icon">📈</span> Historial TTS
+    </div>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">Sistema</div>
+    <div class="nav-item" data-page="campaigns">
+      <span class="icon">🎯</span> Campañas → SKU
+    </div>
+    <div class="nav-item" data-page="settings">
+      <span class="icon">⚙️</span> Configuración
+    </div>
+  </div>
+</nav>
+
+<!-- ─── Contenido ───────────────────────────────────── -->
+<main id="main">
+
+  <!-- REPORTE DEL DÍA -->
+  <div class="page active" id="page-daily">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Reporte del día</div>
+        <div class="page-subtitle">Importá y analizá las ventas de Shopify</div>
+      </div>
+      <div class="flex gap-8 items-center">
+        <div class="form-group">
+          <label>Fecha</label>
+          <input type="date" id="daily-date" style="width:150px">
+        </div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" onclick="loadDay()">⬇ Cargar día</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Strip de días importados -->
+    <div id="daily-days-strip" style="margin-bottom:10px;padding:10px 14px;background:var(--wh,#fff);border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.04)"></div>
+
+    <div id="daily-content">
+      <div class="empty-state">
+        <div class="icon">📊</div>
+        <div class="msg">Seleccioná una fecha y hacé click en "Cargar Shopify"</div>
+        <div class="hint">Datos directos de Shopify · O subí un CSV manualmente</div>
+        <br>
+        <label class="btn btn-secondary" style="cursor:pointer">
+          📁 Subir CSV Shopify
+          <input type="file" accept=".csv" style="display:none" onchange="uploadShopifyCsv(this)">
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD SHOPIFY -->
+  <div class="page" id="page-history">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Dashboard Shopify</div>
+        <div class="page-subtitle">Rendimiento por período · Hoy · Ayer · Este mes · Mes anterior</div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-secondary btn-sm" onclick="loadHistory()">↺ Actualizar</button>
+      </div>
+    </div>
+    <div id="history-content" class="loading">Cargando...</div>
+  </div>
+
+  <!-- SEGUIMIENTO COD -->
+  <div class="page" id="page-cod">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Seguimiento COD</div>
+        <div class="page-subtitle">Estado de pedidos · Facturación · Conversión</div>
+      </div>
+      <div class="flex gap-8 items-center">
+        <div class="form-group">
+          <label>Desde</label>
+          <input type="date" id="cod-from" style="width:135px">
+        </div>
+        <div class="form-group">
+          <label>Hasta</label>
+          <input type="date" id="cod-to" style="width:135px">
+        </div>
+        <div style="margin-top:16px;display:flex;gap:6px">
+          <button class="btn btn-secondary" onclick="loadCodDashboard()">↺ Actualizar</button>
+          <label class="btn btn-secondary" style="cursor:pointer">
+            📁 CSV Simla
+            <input type="file" accept=".csv" style="display:none" onchange="uploadSimlaCsv(this)">
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="cod-dashboard" class="loading">Cargando...</div>
+
+    <div style="margin-top:16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div class="section-title" style="margin:0;flex:1">Pedidos COD</div>
+        <select id="cod-status-filter" style="padding:7px 10px;border:1.5px solid var(--lt2);border-radius:6px;font-size:13px;background:var(--card-bg);color:var(--fg)">
+          <option value="">Todos los estados</option>
+          <option value="pending">Pendiente</option>
+          <option value="confirmed">Confirmado</option>
+          <option value="delivered">Entregado</option>
+          <option value="paid">Cobrado</option>
+          <option value="refused">Rechazado</option>
+          <option value="returned">Devuelto</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="loadCodTable()">🔍 Filtrar</button>
+      </div>
+      <div id="cod-content" class="loading">Cargando...</div>
+    </div>
+  </div>
+
+  <!-- CAMPAÑAS → SKU -->
+  <div class="page" id="page-campaigns">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Campañas → Grupo SKU</div>
+        <div class="page-subtitle">Asigná cada campaña al grupo de producto al que apunta</div>
+      </div>
+    </div>
+    <div id="campaigns-content" class="loading">Cargando...</div>
+  </div>
+
+  <!-- BASE DE DATOS SKUs -->
+  <div class="page" id="page-skus">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Base de datos de SKUs</div>
+        <div class="page-subtitle">Costos de producto y envío · Importar actualiza los existentes, mantiene los que no están en el CSV</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="openSkuModal()">+ Nuevo SKU</button>
+    </div>
+
+    <!-- Toolbar: búsqueda + acciones -->
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+      <input type="text" id="sku-search" placeholder="🔍 Buscar SKU o grupo..."
+             style="padding:7px 12px;border:1.5px solid var(--lt2);border-radius:6px;font-size:13px;flex:1;min-width:180px;max-width:300px"
+             oninput="renderSkus()">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto">
+        <button class="btn btn-secondary btn-sm" onclick="downloadSkuTemplate()" title="Descargar CSV de ejemplo con el formato correcto">↓ Plantilla</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportSkusCsv()" title="Exportar todos los SKUs actuales como CSV">↓ Exportar</button>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="Importar CSV — actualiza existentes, agrega nuevos, mantiene los que no están en el archivo">
+          ↑ Importar CSV
+          <input type="file" accept=".csv" style="display:none" onchange="importSkusCsv(this)">
+        </label>
+        <button class="btn btn-danger btn-sm" onclick="deleteAllSkus()" title="Eliminar TODOS los SKUs de la base de datos">🗑 Borrar todo</button>
+      </div>
+    </div>
+
+    <div id="skus-content" class="loading">Cargando...</div>
+
+    <!-- Modal SKU -->
+    <div id="sku-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center">
+      <div class="card" style="width:360px;z-index:101">
+        <div class="card-title" id="sku-modal-title">Nuevo SKU</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="form-group">
+            <label>SKU *</label>
+            <input type="text" id="sm-sku" placeholder="ESNT-BLA">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="form-group">
+              <label>Costo producto (€)</label>
+              <input type="number" id="sm-cost" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-group">
+              <label>Envío ES (€)</label>
+              <input type="number" id="sm-ship-es" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-group">
+              <label>Envío INT (€)</label>
+              <input type="number" id="sm-ship-int" step="0.01" min="0" placeholder="0.00">
+            </div>
+            <div class="form-group">
+              <label>Grupo</label>
+              <input type="text" id="sm-grupo" placeholder="ESNT-">
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+              <input type="checkbox" id="sm-upsell" style="width:16px;height:16px;cursor:pointer">
+              <label for="sm-upsell" style="cursor:pointer;margin:0;font-size:13px">Es upsell (revenue y costos van al SKU principal del pedido)</label>
+            </div>
+          </div>
+          <div class="flex gap-8" style="justify-content:flex-end;margin-top:4px">
+            <button class="btn btn-secondary" onclick="closeSkuModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="saveSku()">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CALCULADORA -->
+  <div class="page" id="page-calc">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Calculadora de precios</div>
+        <div class="page-subtitle">Calculá el PVP óptimo o el CPA máximo por canal</div>
+      </div>
+    </div>
+    <div class="cc-tabs">
+      <button class="cc-tab active-pvp" id="cc-tab-pvp" onclick="ccShowCalc('pvp')">CPA → PVP mínimo</button>
+      <button class="cc-tab" id="cc-tab-cpa" onclick="ccShowCalc('cpa')">PVP → CPA máximo</button>
+    </div>
+    <div id="cc-pvp-container"></div>
+    <div id="cc-cpa-container" style="display:none"></div>
+  </div>
+
+  <!-- TTS REPORTE -->
+  <div class="page" id="page-tts">
+    <div class="page-header">
+      <div>
+        <div class="page-title">TikTok Shop — Reporte del día</div>
+        <div class="page-subtitle">Rentabilidad diaria · Afiliados · GMV Max</div>
+      </div>
+    </div>
+    <!-- Hidden date — set by smart upload zone -->
+    <input type="date" id="tts-date" style="display:none">
+    <!-- Days strip -->
+    <div id="tts-days-strip" style="margin-bottom:10px;padding:10px 14px;background:var(--wh,#fff);border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.04)"></div>
+    <!-- Smart upload zone — rendered by renderTTSUploadZone() -->
+    <div id="tts-upload-zone" style="margin-bottom:16px"></div>
+    <div id="tts-content">
+      <div class="empty-state">
+        <div class="icon">🛒</div>
+        <div class="msg">Arrastrá tus archivos para generar el reporte</div>
+        <div class="hint">CSV de afiliados + XLSX de campañas GMV Max · la fecha se detecta sola</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TTS HISTORIAL -->
+  <div class="page" id="page-tts-history">
+    <div class="page-header">
+      <div>
+        <div class="page-title">TikTok Shop — Historial</div>
+        <div class="page-subtitle">Días guardados · rentabilidad acumulada</div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-secondary btn-sm" onclick="loadTTSHistoryAll()">↺ Actualizar</button>
+      </div>
+    </div>
+    <div id="tts-history-content" class="loading">Cargando...</div>
+  </div>
+
+  <!-- CONFIGURACIÓN -->
+  <div class="page" id="page-settings">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Configuración</div>
+        <div class="page-subtitle">API, parámetros COD y acceso</div>
+      </div>
+    </div>
+    <div id="settings-content" class="loading">Cargando...</div>
+  </div>
+
+</main>
+
+<!-- Scripts -->
+<script src="/lib/api.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="/pages/daily.js"></script>
+<script src="/pages/history.js"></script>
+<!-- dashboard.js removed — replaced by new history.js -->
+<script src="/pages/tts.js"></script>
+<script src="/pages/cod.js"></script>
+<script src="/pages/skus.js"></script>
+<script src="/pages/campaigns.js"></script>
+<script src="/pages/calc.js"></script>
+<script src="/pages/settings.js"></script>
+<script src="/pages/tts-history.js"></script>
+
+<script>
+// ─── Navegación ────────────────────────────────────────
+function showPage(pageId) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+  const page = document.getElementById('page-' + pageId);
+  if (page) page.classList.add('active');
+
+  const navItem = document.querySelector(`.nav-item[data-page="${pageId}"]`);
+  if (navItem) navItem.classList.add('active');
+
+  // Cargar datos de la página al navegar
+  const loaders = {
+    daily:        loadDaysStrip,
+    history:      loadHistory,
+    cod:          loadCodDashboard,
+    skus:         loadSkus,
+    campaigns:    loadCampaigns,
+    calc:         loadCalc,
+    settings:     loadSettings,
+    'tts':        () => { renderTTSUploadZone(); },
+    'tts-history': () => { loadTTSHistoryAll(); },
+  };
+  if (loaders[pageId]) loaders[pageId]();
+}
+
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => showPage(item.dataset.page));
+});
+
+// Inicializar
+document.getElementById('daily-date').value = today();
+loadDaysStrip(); // cargar strip de días al arrancar
+document.getElementById('tts-date').value = today();
+const { from: cf, to: ct } = thisMonthRange();
+document.getElementById('cod-from').value = cf;
+document.getElementById('cod-to').value   = ct;
+</script>
+
+</body>
+</html>

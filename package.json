@@ -1,0 +1,18 @@
+{
+  "name": "jupplies-reports",
+  "version": "1.0.0",
+  "description": "Reporte diario y mensual de ventas Shopify",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cookie-session": "^2.1.1",
+    "express": "^4.18.3",
+    "sql.js": "^1.12.0"
+  },
+  "devDependencies": {
+    "xlsx": "^0.18.5"
+  }
+}
