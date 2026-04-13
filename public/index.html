@@ -257,18 +257,12 @@
 
   <!-- TTS REPORTE -->
   <div class="page" id="page-tts">
-    <div class="page-header">
-      <div>
-        <div class="page-title">TikTok Shop — Reporte del día</div>
-        <div class="page-subtitle">Rentabilidad diaria · Afiliados · GMV Max</div>
-      </div>
-    </div>
-    <!-- Hidden date — set by smart upload zone -->
     <input type="date" id="tts-date" style="display:none">
-    <!-- Days strip -->
-    <div id="tts-days-strip" style="margin-bottom:10px;padding:10px 14px;background:var(--wh,#fff);border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.04)"></div>
-    <!-- Smart upload zone — rendered by renderTTSUploadZone() -->
-    <div id="tts-upload-zone" style="margin-bottom:16px"></div>
+    <!-- Strip + Upload en una fila -->
+    <div style="display:grid;grid-template-columns:1fr 300px;gap:10px;margin-bottom:10px;align-items:stretch">
+      <div id="tts-days-strip" style="padding:10px 14px;background:var(--wh,#fff);border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.04)"></div>
+      <div id="tts-upload-zone"></div>
+    </div>
     <div id="tts-content">
       <div class="empty-state">
         <div class="icon">🛒</div>

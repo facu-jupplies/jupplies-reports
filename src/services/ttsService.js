@@ -245,25 +245,70 @@ function classifyOrders(orders, affiliateRows) {
   const totalCSV = totalPaidAfil + totalOrgAfil + totalOrganico;
   console.log(`[TTS classify] CSV: ${totalCSV} (paid_afil:${totalPaidAfil} org_afil:${totalOrgAfil} propio:${totalOrganico}) | Simla: ${orders.filter(o=>o.status==='valid').length} | Comm: paid €${commTotalPaidAfil.toFixed(2)} org €${commTotalOrgAfil.toFixed(2)}`);
 
-  // Comisión promedio por pedido
-  const avgCommPaidAfil = totalPaidAfil > 0 ? commTotalPaidAfil / totalPaidAfil : 0;
-  const avgCommOrgAfil  = totalOrgAfil  > 0 ? commTotalOrgAfil  / totalOrgAfil  : 0;
+  // 2. Agregar por SKU: cuántos de cada tipo + comisiones totales por SKU
+  const skuStats = {}; // sku → { paid: N, org: N, commPaid: €, commOrg: € }
 
-  // 2. Asignar tipo: los primeros N pedidos = paid_afil, siguientes M = org_afil, resto = propio
-  let paidLeft = totalPaidAfil;
-  let orgLeft  = totalOrgAfil;
+  for (const af of affiliateRows) {
+    const commPctAds      = parseFloat(af.commPctAds)      || 0;
+    const commPctStandard = parseFloat(af.commPctStandard)  || 0;
+    const commReal        = parseFloat(af.commReal)         || 0;
+    const commRealAds     = parseFloat(af.commRealAds)      || 0;
+    const refunded = af.fullyRefunded === true || String(af.fullyRefunded || '').toLowerCase() === 'true';
+    const noApto = String(af.orderStatus || '').toLowerCase().includes('no apt');
+    if (refunded || noApto) continue;
+
+    const sku = (af.skus?.[0] || af.sellerSku || '').toUpperCase().trim();
+    if (!sku) continue;
+
+    if (!skuStats[sku]) skuStats[sku] = { paid: 0, org: 0, commPaid: 0, commOrg: 0 };
+
+    if (commPctAds > 0) {
+      skuStats[sku].paid++;
+      skuStats[sku].commPaid += commReal + commRealAds;
+    } else if (commPctStandard > 0) {
+      skuStats[sku].org++;
+      skuStats[sku].commOrg += commReal;
+    }
+  }
+
+  // Debug
+  console.log('[TTS classify] skuStats:');
+  for (const [sku, s] of Object.entries(skuStats)) {
+    console.log(`  ${sku}: paid=${s.paid} org=${s.org} commPaid=${s.commPaid.toFixed(2)} commOrg=${s.commOrg.toFixed(2)}`);
+  }
+
+  // 3. Asignar tipo y comisión a cada pedido de Simla matcheando por SKU
+  const remaining = {};
+  for (const [sku, s] of Object.entries(skuStats)) {
+    remaining[sku] = { paid: s.paid, org: s.org, commPerPaid: s.paid > 0 ? s.commPaid / s.paid : 0, commPerOrg: s.org > 0 ? s.commOrg / s.org : 0 };
+  }
+
+  // Fallback para pedidos sin SKU en el CSV: usar totales globales proporcionales
+  const globalRemaining = { paid: totalPaidAfil, org: totalOrgAfil };
 
   return orders.map(order => {
     if (order.status !== 'valid') return order;
 
-    if (paidLeft > 0) {
-      paidLeft--;
-      return { ...order, order_type: 'paid_afiliado', commission_cost: round(avgCommPaidAfil) };
+    const sku = order.primary_sku?.toUpperCase() || '';
+    // Buscar en remaining: exacto, sin sufijo, o genérico
+    const stat = remaining[sku]
+      || remaining[sku.replace(/-[A-Z0-9]+$/, '-')]
+      || remaining[sku.replace(/-[A-Z0-9]+$/, '')]
+      || remaining[sku.replace(/\*\d+$/, '')];
+
+    if (stat) {
+      if (stat.paid > 0) {
+        stat.paid--;
+        return { ...order, order_type: 'paid_afiliado', commission_cost: round(stat.commPerPaid) };
+      }
+      if (stat.org > 0) {
+        stat.org--;
+        return { ...order, order_type: 'afiliado', commission_cost: round(stat.commPerOrg) };
+      }
     }
-    if (orgLeft > 0) {
-      orgLeft--;
-      return { ...order, order_type: 'afiliado', commission_cost: round(avgCommOrgAfil) };
-    }
+
+    // Sin match por SKU: marcar como propio (no inventar comisiones)
+    // Los pedidos que no matchean con el CSV son propios/orgánicos
     return { ...order, order_type: 'organico', commission_cost: 0 };
   });
 }

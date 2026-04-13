@@ -82,20 +82,47 @@ router.post('/report', async (req, res) => {
       });
     }
 
-    // Enriquecer affiliateRows con SKUs de Simla (para classifyOrders por SKU)
-    // El CSV no tiene SKU, pero Simla sí — inyectar SKUs por producto
-    const simlaTTSMap = await fetchSimlaTTSOrders(date).catch(() => ({}));
+    // Enriquecer affiliateRows con SKUs usando nombre de producto → SKU
+    // El CSV tiene "productName" (nombre del producto en TikTok)
+    // Simla tiene pedidos TTS con displayName → offer.article (SKU real)
+    const { buildTTSProductNameMap } = require('../services/simlaService');
+    const nameToSku = await buildTTSProductNameMap(date, date).catch(() => ({}));
+
+    let enriched = 0;
     for (const af of affiliateRows) {
       if (af.skus && af.skus.length > 0) continue;
-      // Buscar en Simla por externalId (Shopify ID, no TikTok ID — puede no matchear)
-      const simlaMatch = simlaTTSMap[String(af.orderId).trim()];
-      if (simlaMatch) {
-        af.skus = simlaMatch.skus;
-        af.sellerSku = simlaMatch.skus[0];
+      // Matchear por nombre de producto (fuzzy: buscar el nombre del CSV como substring)
+      const afName = (af.productName || '').trim();
+      if (!afName) continue;
+
+      // Buscar match exacto primero, luego substring
+      let matchedSku = nameToSku[afName];
+      if (!matchedSku) {
+        // Substring match: el nombre del CSV puede estar truncado
+        for (const [simlaName, sku] of Object.entries(nameToSku)) {
+          if (simlaName.startsWith(afName.slice(0, 30)) || afName.startsWith(simlaName.slice(0, 30))) {
+            matchedSku = sku;
+            break;
+          }
+        }
+      }
+
+      if (matchedSku) {
+        af.skus = [matchedSku];
+        af.sellerSku = matchedSku;
+        enriched++;
       }
     }
 
-    console.log(`[TTS] Simla: ${orders.length} pedidos | CSV afiliados: ${affiliateRows.length} | GMV campañas: ${Object.keys(gmvCampaigns).length}`);
+    const withSku = affiliateRows.filter(a => a.skus && a.skus.length > 0).length;
+    const withoutSku = affiliateRows.filter(a => !a.skus || a.skus.length === 0);
+    console.log(`[TTS] Simla: ${orders.length} pedidos | CSV: ${affiliateRows.length} (${enriched} enriquecidos, ${withSku} con SKU, ${withoutSku.length} SIN SKU) | GMV: ${Object.keys(gmvCampaigns).length}`);
+    if (withoutSku.length > 0) {
+      console.log('[TTS] CSV sin SKU (primeros 5):');
+      for (const af of withoutSku.slice(0, 5)) {
+        console.log('  orderId:', af.orderId?.slice(0,10), '| productName:', (af.productName||'').slice(0,50), '| comm:', af.commReal);
+      }
+    }
 
     // 3. Clasificar por tipo usando matching por SKU
     orders = classifyOrders(orders, affiliateRows);

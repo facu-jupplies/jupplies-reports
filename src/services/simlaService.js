@@ -258,10 +258,47 @@ async function fetchSimlaTTSOrders(date) {
   return orderMap;
 }
 
+/**
+ * Construye mapa nombre_producto → SKU desde pedidos TTS en Simla.
+ * Usa los items de pedidos para vincular displayName con offer.article.
+ * Se usa para matchear las comisiones del CSV de afiliados con SKUs reales.
+ */
+async function buildTTSProductNameMap(dateFrom, dateTo) {
+  const apiKey = getSimlaApiKey();
+  if (!apiKey) return {};
+
+  const nameToSku = {};
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const url = `${SIMLA_BASE}/orders?apiKey=${apiKey}&limit=100&filter%5BcreatedAtFrom%5D=${dateFrom}+00%3A00%3A00&filter%5BcreatedAtTo%5D=${dateTo}+23%3A59%3A59&page=${page}`;
+    const res = await fetch(url);
+    if (!res.ok) break;
+    const data = await res.json();
+    if (!data.success) break;
+    totalPages = data.pagination?.totalPageCount || 1;
+
+    for (const order of (data.orders || [])) {
+      if (order.site !== 'tik-tok-shop') continue;
+      for (const item of (order.items || [])) {
+        const name = (item.offer?.displayName || '').trim();
+        const sku = (item.offer?.article || '').trim().toUpperCase();
+        if (name && sku) nameToSku[name] = sku;
+      }
+    }
+    page++;
+  }
+
+  console.log(`[Simla] ${Object.keys(nameToSku).length} mapeos nombre→SKU para TTS`);
+  return nameToSku;
+}
+
 module.exports = {
   fetchSimlaProducts,
   fetchSimlaOrders,
   fetchSimlaTTSOrders,
+  buildTTSProductNameMap,
   getSimlaSkuInfo,
   getSimlaStockMap,
   syncSimlaCosts,

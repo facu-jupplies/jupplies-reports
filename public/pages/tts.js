@@ -4,9 +4,14 @@ let _ttsAffiliateRows = [];   // filas parseadas del CSV de afiliados
 let _ttsGMVCampaigns  = {};   // { campaignName: spend } del XLSX GMV Max
 let _ttsLastResult    = null; // último resultado calculado (para guardar en historial)
 
-// ── Strip de días guardados TTS ──────────────────────────────────────────────
+// ── Strip de días TTS con multiselect + rango ───────────────────────────────
 
 let _ttsDaysStripMonth = null;
+let _ttsSelectedDays = new Set();   // días seleccionados individualmente
+let _ttsRangeFrom = '';             // rango desde
+let _ttsRangeTo = '';               // rango hasta
+let _ttsSavedDates = new Set();     // cache de fechas guardadas
+let _ttsSelectionMode = 'none';     // 'none' | 'days' | 'range'
 
 async function loadTTSDaysStrip() {
   const el = document.getElementById('tts-days-strip');
@@ -19,77 +24,238 @@ async function loadTTSDaysStrip() {
 
   try {
     const savedDates = await API.ttsGetDates();
-    const savedSet = new Set(savedDates);
-    const todayStr = today();
-
-    // Tabs por mes desde Enero 2026
-    const months = [];
-    const startYear = 2026, startMonth = 1;
-    const endYear = now.getFullYear(), endMonth = now.getMonth() + 1;
-    for (let y = startYear; y <= endYear; y++) {
-      const mStart = y === startYear ? startMonth : 1;
-      const mEnd = y === endYear ? endMonth : 12;
-      for (let m = mStart; m <= mEnd; m++) months.push(`${y}-${String(m).padStart(2, '0')}`);
-    }
-
-    const MNAMES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-    const tabs = months.map(ym => {
-      const [y, m] = ym.split('-').map(Number);
-      const active = ym === _ttsDaysStripMonth;
-      const count = savedDates.filter(d => d.startsWith(ym)).length;
-      const bg = active ? '#fe2c55' : count > 0 ? 'var(--wh,#fff)' : 'transparent';
-      const color = active ? '#fff' : 'var(--md)';
-      return `<div onclick="_ttsDaysStripMonth='${ym}';loadTTSDaysStrip()"
-        style="padding:4px 10px;border-radius:5px;font-size:11px;font-weight:${active?'700':'500'};background:${bg};color:${color};border:1px solid ${active?'transparent':'var(--lt2)'};cursor:pointer;white-space:nowrap">
-        ${MNAMES[m]}${count > 0 ? ' <span style="font-size:9px;opacity:.7">'+count+'d</span>' : ''}
-      </div>`;
-    }).join('');
-
-    // Chips del mes
-    const [selY, selM] = _ttsDaysStripMonth.split('-').map(Number);
-    const lastDay = new Date(selY, selM, 0).getDate();
-    const monthDays = [];
-    for (let d = 1; d <= lastDay; d++) {
-      const ds = `${selY}-${String(selM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      if (ds < todayStr) monthDays.push(ds);
-    }
-
-    const missing = monthDays.filter(d => !savedSet.has(d));
-    const chips = monthDays.map(ds => {
-      const saved = savedSet.has(ds);
-      const dayNum = ds.split('-')[2];
-      const selected = ds === document.getElementById('tts-date').value;
-      const bg = selected ? '#fe2c55' : saved ? 'rgba(26,122,66,.12)' : 'rgba(239,68,68,.12)';
-      const color = selected ? '#fff' : saved ? 'var(--gr)' : '#ef4444';
-      const icon = selected ? '▸' : saved ? '✓' : '✕';
-      return `<div onclick="selectTTSDayFromStrip('${ds}')" title="${fd(ds)}${saved?' — guardado':' — sin guardar'}"
-        style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:3px 5px;border-radius:5px;background:${bg};min-width:28px;cursor:pointer">
-        <span style="font-size:8px;font-weight:700;color:${color}">${icon}</span>
-        <span style="font-size:10px;font-weight:600;color:${color}">${parseInt(dayNum)}</span>
-      </div>`;
-    }).join('');
-
-    const statusText = monthDays.length === 0 ? ''
-      : missing.length > 0
-        ? `<span style="color:#ef4444;font-size:11px;font-weight:600">${missing.length} día${missing.length>1?'s':''} sin guardar</span>`
-        : `<span style="color:var(--gr);font-size:11px;font-weight:600">✓ Mes completo</span>`;
-
-    el.innerHTML = `
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--md)">Días guardados TTS</span>
-        ${statusText}
-      </div>
-      <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">${tabs}</div>
-      <div style="display:flex;gap:3px;flex-wrap:wrap">${chips}</div>
-    `;
+    _ttsSavedDates = new Set(savedDates);
+    _renderTTSStrip();
   } catch (err) {
     el.innerHTML = '';
   }
 }
 
-function selectTTSDayFromStrip(date) {
-  document.getElementById('tts-date').value = date;
-  loadTTSDaysStrip();
+function _renderTTSStrip() {
+  const el = document.getElementById('tts-days-strip');
+  if (!el) return;
+
+  const now = new Date();
+  const todayStr = today();
+  const MNAMES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+  // Month tabs
+  const months = [];
+  const startYear = 2026, startMonth = 1;
+  const endYear = now.getFullYear(), endMonth = now.getMonth() + 1;
+  for (let y = startYear; y <= endYear; y++) {
+    for (let m = (y === startYear ? startMonth : 1); m <= (y === endYear ? endMonth : 12); m++)
+      months.push(`${y}-${String(m).padStart(2, '0')}`);
+  }
+
+  const tabs = months.map(ym => {
+    const [, m] = ym.split('-').map(Number);
+    const active = ym === _ttsDaysStripMonth;
+    const count = [..._ttsSavedDates].filter(d => d.startsWith(ym)).length;
+    return `<div onclick="_ttsDaysStripMonth='${ym}';_renderTTSStrip()"
+      style="padding:4px 10px;border-radius:5px;font-size:11px;font-weight:${active?'700':'500'};background:${active?'#fe2c55':count>0?'var(--wh,#fff)':'transparent'};color:${active?'#fff':'var(--md)'};border:1px solid ${active?'transparent':'var(--lt2)'};cursor:pointer;white-space:nowrap">
+      ${MNAMES[m]}${count > 0 ? ' <span style="font-size:9px;opacity:.7">'+count+'d</span>' : ''}
+    </div>`;
+  }).join('');
+
+  // Day chips
+  const [selY, selM] = _ttsDaysStripMonth.split('-').map(Number);
+  const lastDay = new Date(selY, selM, 0).getDate();
+  const monthDays = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const ds = `${selY}-${String(selM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    if (ds < todayStr) monthDays.push(ds);
+  }
+
+  const chips = monthDays.map(ds => {
+    const saved = _ttsSavedDates.has(ds);
+    const dayNum = parseInt(ds.split('-')[2]);
+    const isSelected = _ttsSelectedDays.has(ds);
+    const isInRange = _ttsSelectionMode === 'range' && _ttsRangeFrom && _ttsRangeTo && ds >= _ttsRangeFrom && ds <= _ttsRangeTo && saved;
+
+    let bg, color, icon;
+    if (isSelected || isInRange) {
+      bg = '#2563eb'; color = '#fff'; icon = '●';
+    } else if (saved) {
+      bg = 'rgba(26,122,66,.12)'; color = 'var(--gr)'; icon = '✓';
+    } else {
+      bg = 'rgba(239,68,68,.08)'; color = '#ef4444'; icon = '✕';
+    }
+
+    const onclick = saved ? `toggleTTSDay('${ds}')` : '';
+    const cursor = saved ? 'pointer' : 'default';
+    const opacity = saved ? '1' : '0.5';
+
+    return `<div ${onclick ? 'onclick="'+onclick+'"' : ''} title="${fd(ds)}${saved?' — guardado':' — sin guardar'}"
+      style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:3px 5px;border-radius:5px;background:${bg};min-width:28px;cursor:${cursor};opacity:${opacity};transition:background .1s">
+      <span style="font-size:8px;font-weight:700;color:${color}">${icon}</span>
+      <span style="font-size:10px;font-weight:600;color:${color}">${dayNum}</span>
+    </div>`;
+  }).join('');
+
+  // Selection info
+  const selCount = _ttsSelectionMode === 'days' ? _ttsSelectedDays.size
+    : _ttsSelectionMode === 'range' ? [..._ttsSavedDates].filter(d => d >= _ttsRangeFrom && d <= _ttsRangeTo).length
+    : 0;
+
+  const selInfo = selCount > 0
+    ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px">
+        <span style="color:var(--bl,#2563eb);font-weight:600">● ${selCount} día${selCount>1?'s':''} seleccionado${selCount>1?'s':''}</span>
+        <button onclick="clearTTSSelection()" style="font-size:10px;padding:2px 8px;border:1px solid var(--lt2);border-radius:4px;background:transparent;cursor:pointer;color:var(--md)">✕ Limpiar</button>
+      </div>`
+    : '';
+
+  // Range inputs
+  const rangeHtml = `
+    <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+      <span style="font-size:10px;color:var(--md);font-weight:600">Rango:</span>
+      <input type="date" id="tts-range-from" value="${_ttsRangeFrom}"
+        style="padding:3px 6px;border:1.5px solid var(--lt2);border-radius:5px;font-size:11px;width:125px">
+      <span style="color:var(--md);font-size:11px">→</span>
+      <input type="date" id="tts-range-to" value="${_ttsRangeTo}"
+        style="padding:3px 6px;border:1.5px solid var(--lt2);border-radius:5px;font-size:11px;width:125px">
+      <button onclick="applyTTSRange()" style="padding:3px 10px;border:none;border-radius:5px;background:#fe2c55;color:#fff;font-size:10px;font-weight:700;cursor:pointer">Aplicar</button>
+    </div>`;
+
+  const missing = monthDays.filter(d => !_ttsSavedDates.has(d));
+  const statusText = monthDays.length === 0 ? ''
+    : missing.length > 0
+      ? `<span style="color:#ef4444;font-size:11px;font-weight:600">${missing.length} sin guardar</span>`
+      : `<span style="color:var(--gr);font-size:11px;font-weight:600">✓ Completo</span>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--md)">Días guardados TTS</span>
+      ${statusText}
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">${tabs}</div>
+    <div style="display:flex;gap:3px;flex-wrap:wrap">${chips}</div>
+    ${selInfo}
+    ${rangeHtml}
+  `;
+}
+
+function toggleTTSDay(date) {
+  // Clear range mode, switch to days mode
+  _ttsSelectionMode = 'days';
+  _ttsRangeFrom = '';
+  _ttsRangeTo = '';
+
+  if (_ttsSelectedDays.has(date)) {
+    _ttsSelectedDays.delete(date);
+  } else {
+    _ttsSelectedDays.add(date);
+  }
+
+  if (_ttsSelectedDays.size === 0) _ttsSelectionMode = 'none';
+
+  _renderTTSStrip();
+  loadTTSAggregated();
+}
+
+function applyTTSRange() {
+  const from = document.getElementById('tts-range-from')?.value;
+  const to = document.getElementById('tts-range-to')?.value;
+  if (!from || !to) return;
+
+  // Clear individual selection, switch to range mode
+  _ttsSelectedDays.clear();
+  _ttsRangeFrom = from;
+  _ttsRangeTo = to;
+  _ttsSelectionMode = 'range';
+
+  _renderTTSStrip();
+  loadTTSAggregated();
+}
+
+function clearTTSSelection() {
+  _ttsSelectedDays.clear();
+  _ttsRangeFrom = '';
+  _ttsRangeTo = '';
+  _ttsSelectionMode = 'none';
+
+  _renderTTSStrip();
+  document.getElementById('tts-content').innerHTML = `
+    <div class="empty-state">
+      <div class="icon">🛒</div>
+      <div class="msg">Seleccioná días o un rango para ver el reporte</div>
+      <div class="hint">Clickeá los días verdes arriba o usá el rango de fechas</div>
+    </div>`;
+}
+
+async function loadTTSAggregated() {
+  const el = document.getElementById('tts-content');
+
+  // Determine which dates to load
+  let datesToLoad = [];
+  if (_ttsSelectionMode === 'days') {
+    datesToLoad = [..._ttsSelectedDays].sort();
+  } else if (_ttsSelectionMode === 'range') {
+    datesToLoad = [..._ttsSavedDates].filter(d => d >= _ttsRangeFrom && d <= _ttsRangeTo).sort();
+  }
+
+  if (datesToLoad.length === 0) return;
+
+  el.innerHTML = '<div class="loading">Cargando reporte...</div>';
+
+  try {
+    const minDate = datesToLoad[0];
+    const maxDate = datesToLoad[datesToLoad.length - 1];
+    const data = await API.ttsGetHistory(minDate, maxDate);
+
+    // Filter to only selected dates
+    const dateSet = new Set(datesToLoad);
+    const filteredSummary = data.summary.filter(d => dateSet.has(d.date));
+    const filteredGrupos = data.grupos.filter(g => dateSet.has(g.date));
+
+    if (filteredSummary.length === 0) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">📅</div><div class="msg">Sin datos para los días seleccionados</div></div>`;
+      return;
+    }
+
+    // Aggregate using existing function from tts-history.js
+    const agg = aggregatePeriod(filteredSummary, filteredGrupos);
+
+    // Convert to format compatible with renderTTSReport
+    // Map gruposAgg fields to match what renderTTSReport expects
+    const pl = agg.gruposAgg.map(g => ({
+      ...g,
+      gmv_max_spend: g.gmv_max_spend || 0,
+      seller_discount: g.seller_discount || 0,
+    }));
+
+    const summary = {
+      orders: agg.tot.orders,
+      orders_propio: agg.tot.orders_propio,
+      orders_paid_afil: agg.tot.orders_paid_afil,
+      orders_org_afil: agg.tot.orders_org_afil,
+      gmv: agg.tot.gmv,
+      cogs: agg.tot.cogs,
+      shipping: agg.tot.shipping,
+      iva: agg.tot.iva,
+      tiktok_platform: agg.tot.tiktok_platform,
+      commission_cost: agg.tot.commission_cost,
+      gmv_max_spend: agg.tot.gmv_max_spend,
+      seller_discount: 0,
+      gross_profit: agg.tot.gross_profit,
+      net_profit: agg.tot.net_profit,
+      margin_pct: agg.tot.margin_pct,
+      margin_pct_cogs: agg.tot.margin_pct_cogs,
+      cpa: agg.tot.cpa,
+    };
+
+    const dateLabel = datesToLoad.length === 1
+      ? datesToLoad[0]
+      : datesToLoad.length + ' días seleccionados';
+
+    _ttsLastResult = { date: dateLabel, result: { pl, summary, orders: [] } };
+    _ttsPLData = pl;
+    _ttsSortCol = 'net_profit';
+    _ttsSortAsc = false;
+    renderTTSReport(dateLabel, { pl, summary, orders: [] });
+  } catch (err) {
+    showError(el, err.message);
+  }
 }
 
 // ── Helpers de normalización ─────────────────────────────────────────────────
@@ -403,7 +569,7 @@ function renderTTSUploadZone() {
 
   zone.innerHTML = `
   <div id="tts-dropzone"
-    style="border:2px dashed var(--border,#e2e8f0);border-radius:12px;padding:28px 24px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;background:var(--lt2,#f8fafc)"
+    style="border:2px dashed var(--border,#e2e8f0);border-radius:10px;padding:14px 16px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;background:var(--lt2,#f8fafc)"
     ondragover="event.preventDefault();document.getElementById('tts-dropzone').style.borderColor='#fe2c55';document.getElementById('tts-dropzone').style.background='rgba(254,44,85,.04)'"
     ondragleave="document.getElementById('tts-dropzone').style.borderColor='';document.getElementById('tts-dropzone').style.background=''"
     ondrop="event.preventDefault();document.getElementById('tts-dropzone').style.borderColor='';document.getElementById('tts-dropzone').style.background='';handleTTSFileDrop(event)"
@@ -468,19 +634,15 @@ function _ttsZoneHTML() {
     </div>`;
   }
 
-  // idle
+  // idle — compact version
   return `
-  <div style="font-size:38px;margin-bottom:10px;opacity:.35">📂</div>
-  <div style="font-weight:700;font-size:15px;margin-bottom:4px;color:var(--fg)">Arrastrá tus archivos TikTok aquí</div>
-  <div style="font-size:12px;color:var(--md);margin-bottom:14px;max-width:420px;margin-left:auto;margin-right:auto">
-    CSV de Afiliados + XLSX de Campañas GMV Max<br>
-    <span style="opacity:.7">La fecha se detecta automáticamente desde los archivos</span>
+  <div style="font-size:13px;font-weight:700;margin-bottom:6px;color:var(--fg)">📂 Importar día nuevo</div>
+  <div style="font-size:11px;color:var(--md);margin-bottom:8px">CSV Afiliados + XLSX GMV Max</div>
+  <div style="display:inline-flex;gap:6px;align-items:center;padding:6px 14px;background:rgba(254,44,85,.12);border-radius:16px;color:#fe2c55;font-size:11px;font-weight:700;pointer-events:none">
+    📁 Seleccionar archivos
   </div>
-  <div style="display:inline-flex;gap:6px;align-items:center;padding:7px 18px;background:rgba(254,44,85,.12);border-radius:20px;color:#fe2c55;font-size:12px;font-weight:700;letter-spacing:.3px;pointer-events:none">
-    📁&nbsp; Seleccionar archivos
-  </div>
-  <div style="margin-top:14px;font-size:11px;color:var(--md)">
-    <a href="#" onclick="event.stopPropagation();toggleTTSManual(true)" style="color:var(--md);text-decoration:underline dotted;text-underline-offset:2px">Sin archivos? → ingresar fecha manualmente</a>
+  <div style="margin-top:8px;font-size:10px;color:var(--md)">
+    <a href="#" onclick="event.stopPropagation();toggleTTSManual(true)" style="color:var(--md);text-decoration:underline dotted;text-underline-offset:2px">Fecha manual →</a>
   </div>`;
 }
 
@@ -926,21 +1088,6 @@ function renderTTSReport(date, result) {
   el.innerHTML = `
   <div id="tts-export-area">
 
-    <!-- ── Cabecera de exportación (fecha) ── -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:10px 14px;background:var(--lt2);border-radius:8px">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:20px">🛒</span>
-        <div>
-          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--md)">TikTok Shop — Reporte diario</div>
-          <div style="font-size:20px;font-weight:800;line-height:1.15">${fd(date)}</div>
-        </div>
-      </div>
-      <div style="text-align:right;font-size:11px;color:var(--md)">
-        <div>Jupplies Reports</div>
-        <div style="font-size:10px">${new Date().toLocaleString('es-ES', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}</div>
-      </div>
-    </div>
-
     <!-- ── Fila 1: Facturación + Beneficio ── -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
 
@@ -1202,7 +1349,12 @@ async function saveTTSHistory() {
       summary: result.summary,
       grupos:  result.pl,
     });
-    alert(`✓ Día ${fd(date)} guardado en historial TTS`);
+    // Refresh strip para mostrar el día como guardado
+    await loadTTSDaysStrip();
+    // Auto-seleccionar el día guardado
+    _ttsSelectedDays.add(date);
+    _ttsSelectionMode = 'days';
+    _renderTTSStrip();
   } catch (err) {
     alert('Error al guardar: ' + err.message);
   }
