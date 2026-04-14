@@ -353,16 +353,11 @@ async function loadWebAggregated() {
     }
 
     const dateLabel = datesToLoad.length === 1
-      ? datesToLoad[0]
+      ? fd(datesToLoad[0])
       : datesToLoad.length + ' días seleccionados';
 
-    const m = data.metrics;
-    _skuRows = data.skuMetrics || [];
-    _skuSort = { col: null, dir: 1 };
-    _skuTotalRevBruto = m.rev_bruto;
-
     API.getSimlaStock().then(s => { _simlaStock = s || {}; }).catch(() => {});
-    renderDayReport(dateLabel);
+    renderDayReport(dateLabel, '', data);
   } catch (err) {
     showError(el, err.message);
   }
@@ -374,17 +369,17 @@ function selectDayFromStrip(date) {
   renderDayReport(date);
 }
 
-async function renderDayReport(date, prefixHtml = '') {
+async function renderDayReport(date, prefixHtml = '', preloadedData = null) {
   const el = document.getElementById('daily-content');
   el.innerHTML = '<div class="loading">Calculando métricas...</div>';
 
   try {
-    const data = await API.getDayReport(date);
+    const data = preloadedData || await API.getDayReport(date);
     if (data.empty) {
       el.innerHTML = `<div class="empty-state">
         <div class="icon">📭</div>
-        <div class="msg">Sin datos para ${fd(date)}</div>
-        <div class="hint">Importá el día usando Shopify o subí un CSV.</div>
+        <div class="msg">Sin datos para ${date}</div>
+        <div class="hint">Importá el día usando "Cargar día" o subí un CSV.</div>
       </div>`;
       return;
     }
@@ -395,8 +390,7 @@ async function renderDayReport(date, prefixHtml = '') {
     _skuTotalRevBruto = m.rev_bruto;
     const skuRows = _skuRows;
 
-    // Cargar stock de Simla en background (no bloquea render)
-    API.getSimlaStock().then(s => { _simlaStock = s || {}; }).catch(() => {});
+    if (!preloadedData) API.getSimlaStock().then(s => { _simlaStock = s || {}; }).catch(() => {});
 
     const totalClicks = Object.values(m.clicks_by_platform || {}).reduce((s, v) => s + v, 0);
     const ivaAmt      = m.rev_efectivo - m.net_revenue;
