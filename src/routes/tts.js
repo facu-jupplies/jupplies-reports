@@ -48,23 +48,46 @@ router.post('/report', async (req, res) => {
     const { fetchSimlaOrders } = require('../services/simlaService');
     const simlaOrders = await fetchSimlaOrders(date, 'tik-tok-shop');
 
-    // 2. Construir pedidos desde Simla (ya tienen SKU, revenue, COGS)
+    // 2. Construir pedidos desde Simla con parseSku para expandir multi-SKU
+    const { parseSku } = require('../services/calculator');
+
+    function findSkuData(rawSku) {
+      const sku = rawSku.toUpperCase().trim();
+      return skuMap[sku]
+        || skuMap[sku.replace(/-[A-Z0-9]+$/, '-')]
+        || skuMap[sku.replace(/-[A-Z0-9]+$/, '')];
+    }
+
     let orders = [];
     for (const so of simlaOrders) {
-      const primarySku = so.items[0]?.sku || '';
-      const skuData = skuMap[primarySku]
-        || skuMap[primarySku.replace(/-[A-Z0-9]+$/, '-')]
-        || skuMap[primarySku.replace(/-[A-Z0-9]+$/, '')];
-
-      let cogs = 0, maxShipping = 0;
+      // Expandir todos los items con parseSku (maneja "BANE-TER-RO;PATAS" y "ESNT-BLA*1")
+      const allParts = [];
       for (const item of so.items) {
-        const sd = skuMap[item.sku] || skuMap[item.sku.replace(/-[A-Z0-9]+$/, '-')] || skuMap[item.sku.replace(/-[A-Z0-9]+$/, '')];
-        if (sd) {
-          cogs += (sd.cost || 0) * item.quantity;
-          if ((sd.shipping_es || 0) > maxShipping) maxShipping = sd.shipping_es;
+        const parsed = parseSku(item.sku);
+        if (parsed.length > 0) {
+          for (const p of parsed) {
+            allParts.push({ sku: p.sku, qty: p.qty * item.quantity });
+          }
+        } else if (item.sku) {
+          allParts.push({ sku: item.sku.toUpperCase().trim(), qty: item.quantity });
         }
       }
-      const totalUnits = so.items.reduce((s, i) => s + i.quantity, 0);
+
+      // El primer SKU es el principal
+      const primarySku = allParts[0]?.sku || '';
+      const skuData = findSkuData(primarySku);
+      const grupo = skuData?.grupo || primarySku || 'SIN GRUPO';
+
+      // Calcular COGS y shipping de todos los SKUs expandidos
+      let cogs = 0, maxShipping = 0, totalUnits = 0;
+      for (const part of allParts) {
+        const sd = findSkuData(part.sku);
+        if (sd) {
+          cogs += (sd.cost || 0) * part.qty;
+          if ((sd.shipping_es || 0) > maxShipping) maxShipping = sd.shipping_es;
+        }
+        totalUnits += part.qty;
+      }
       const shipping = maxShipping > 0 ? maxShipping * (1 + Math.max(0, totalUnits - 1) * 0.1) : 0;
 
       orders.push({
@@ -74,7 +97,7 @@ router.post('/report', async (req, res) => {
         revenue:       round(so.totalPrice),
         cogs:          round(cogs),
         shipping:      round(shipping),
-        grupo:         skuData?.grupo || primarySku || 'SIN GRUPO',
+        grupo,
         primary_sku:   primarySku,
         order_type:    'organico',
         commission_cost: 0,
