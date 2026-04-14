@@ -10,7 +10,7 @@ async function loadCalcData() {
 
 // ── Utilities ─────────────────────────────────────────────────
 const _g  = id => document.getElementById(id);
-const _gf = (id, def = 0) => parseFloat(_g(id)?.value) || def;
+const _gf = (id, def = 0) => { const v = parseFloat(_g(id)?.value); return isNaN(v) ? def : v; };
 const _fce = n => '€' + Math.abs(n).toFixed(2);
 const _fcp = n => n.toFixed(1) + '%';
 
