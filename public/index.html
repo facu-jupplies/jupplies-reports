@@ -29,25 +29,12 @@
   </div>
 
   <div class="nav-group">
-    <div class="nav-label">Shopify</div>
-    <div class="nav-item" data-page="history">
-      <span class="icon">📈</span> Dashboard
-    </div>
+    <div class="nav-label">Reportes</div>
     <div class="nav-item active" data-page="daily">
-      <span class="icon">📊</span> Reporte del día
+      <span class="icon">📊</span> Web / Shopify
     </div>
-    <div class="nav-item" data-page="cod">
-      <span class="icon">🚚</span> Seguim. COD
-    </div>
-  </div>
-
-  <div class="nav-group">
-    <div class="nav-label">TikTok Shop</div>
     <div class="nav-item" data-page="tts">
-      <span class="icon">🛒</span> Reporte TTS
-    </div>
-    <div class="nav-item" data-page="tts-history">
-      <span class="icon">📈</span> Historial TTS
+      <span class="icon">🛒</span> TikTok Shop
     </div>
   </div>
 
@@ -100,65 +87,6 @@
     </div>
   </div>
 
-  <!-- DASHBOARD SHOPIFY -->
-  <div class="page" id="page-history">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Dashboard Shopify</div>
-        <div class="page-subtitle">Rendimiento por período · Hoy · Ayer · Este mes · Mes anterior</div>
-      </div>
-      <div style="margin-top:16px">
-        <button class="btn btn-secondary btn-sm" onclick="loadHistory()">↺ Actualizar</button>
-      </div>
-    </div>
-    <div id="history-content" class="loading">Cargando...</div>
-  </div>
-
-  <!-- SEGUIMIENTO COD -->
-  <div class="page" id="page-cod">
-    <div class="page-header">
-      <div>
-        <div class="page-title">Seguimiento COD</div>
-        <div class="page-subtitle">Estado de pedidos · Facturación · Conversión</div>
-      </div>
-      <div class="flex gap-8 items-center">
-        <div class="form-group">
-          <label>Desde</label>
-          <input type="date" id="cod-from" style="width:135px">
-        </div>
-        <div class="form-group">
-          <label>Hasta</label>
-          <input type="date" id="cod-to" style="width:135px">
-        </div>
-        <div style="margin-top:16px;display:flex;gap:6px">
-          <button class="btn btn-secondary" onclick="loadCodDashboard()">↺ Actualizar</button>
-          <label class="btn btn-secondary" style="cursor:pointer">
-            📁 CSV Simla
-            <input type="file" accept=".csv" style="display:none" onchange="uploadSimlaCsv(this)">
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <div id="cod-dashboard" class="loading">Cargando...</div>
-
-    <div style="margin-top:16px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <div class="section-title" style="margin:0;flex:1">Pedidos COD</div>
-        <select id="cod-status-filter" style="padding:7px 10px;border:1.5px solid var(--lt2);border-radius:6px;font-size:13px;background:var(--card-bg);color:var(--fg)">
-          <option value="">Todos los estados</option>
-          <option value="pending">Pendiente</option>
-          <option value="confirmed">Confirmado</option>
-          <option value="delivered">Entregado</option>
-          <option value="paid">Cobrado</option>
-          <option value="refused">Rechazado</option>
-          <option value="returned">Devuelto</option>
-        </select>
-        <button class="btn btn-secondary btn-sm" onclick="loadCodTable()">🔍 Filtrar</button>
-      </div>
-      <div id="cod-content" class="loading">Cargando...</div>
-    </div>
-  </div>
 
   <!-- CAMPAÑAS → SKU -->
   <div class="page" id="page-campaigns">
@@ -272,20 +200,6 @@
     </div>
   </div>
 
-  <!-- TTS HISTORIAL -->
-  <div class="page" id="page-tts-history">
-    <div class="page-header">
-      <div>
-        <div class="page-title">TikTok Shop — Historial</div>
-        <div class="page-subtitle">Días guardados · rentabilidad acumulada</div>
-      </div>
-      <div style="margin-top:16px">
-        <button class="btn btn-secondary btn-sm" onclick="loadTTSHistoryAll()">↺ Actualizar</button>
-      </div>
-    </div>
-    <div id="tts-history-content" class="loading">Cargando...</div>
-  </div>
-
   <!-- CONFIGURACIÓN -->
   <div class="page" id="page-settings">
     <div class="page-header">
@@ -307,7 +221,6 @@
 <script src="/pages/history.js"></script>
 <!-- dashboard.js removed — replaced by new history.js -->
 <script src="/pages/tts.js"></script>
-<script src="/pages/cod.js"></script>
 <script src="/pages/skus.js"></script>
 <script src="/pages/campaigns.js"></script>
 <script src="/pages/calc.js"></script>
@@ -329,14 +242,11 @@ function showPage(pageId) {
   // Cargar datos de la página al navegar
   const loaders = {
     daily:        loadDaysStrip,
-    history:      loadHistory,
-    cod:          loadCodDashboard,
     skus:         loadSkus,
     campaigns:    loadCampaigns,
     calc:         loadCalc,
     settings:     loadSettings,
     'tts':        () => { renderTTSUploadZone(); },
-    'tts-history': () => { loadTTSHistoryAll(); },
   };
   if (loaders[pageId]) loaders[pageId]();
 }
@@ -347,11 +257,8 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 // Inicializar
 document.getElementById('daily-date').value = today();
-loadDaysStrip(); // cargar strip de días al arrancar
+loadDaysStrip();
 document.getElementById('tts-date').value = today();
-const { from: cf, to: ct } = thisMonthRange();
-document.getElementById('cod-from').value = cf;
-document.getElementById('cod-to').value   = ct;
 </script>
 
 </body>

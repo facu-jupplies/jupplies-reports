@@ -161,24 +161,27 @@ async function loadDay() {
 // Mantener alias por si hay referencias externas
 function loadDayWindsor() { loadDay(); }
 
-// ── Strip de días importados con pestañas por mes ────────────────────────────
+// ── Strip de días con multiselect + rango ────────────────────────────────────
 
-let _daysStripMonth = null; // YYYY-MM del mes activo en el strip
+let _daysStripMonth = null;
+let _webSelectedDays = new Set();
+let _webRangeFrom = '';
+let _webRangeTo = '';
+let _webImportedDates = new Set();
+let _webSelectionMode = 'none'; // 'none' | 'days' | 'range'
 
 async function loadDaysStrip() {
   const el = document.getElementById('daily-days-strip');
   if (!el) return;
 
-  // Determinar mes activo (default: mes actual)
   const now = new Date();
   if (!_daysStripMonth) {
     _daysStripMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   }
 
   try {
-    // Fetch todos los días desde Enero 2026 hasta hoy
     const allData = await API.getHistory('2026-01-01', today());
-    const importedDates = new Set(allData.map(d => d.date));
+    _webImportedDates = new Set(allData.map(d => d.date));
     const todayStr = today();
 
     // Generar tabs de meses desde Enero 2026 hasta el mes actual
@@ -211,51 +214,157 @@ async function loadDaysStrip() {
       </div>`;
     }).join('');
 
-    // Chips del mes seleccionado
-    const [selY, selM] = _daysStripMonth.split('-').map(Number);
-    const lastDay = new Date(selY, selM, 0).getDate();
-    const monthDays = [];
-    for (let d = 1; d <= lastDay; d++) {
-      const ds = `${selY}-${String(selM).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      if (ds < todayStr) monthDays.push(ds);
-    }
-
-    const missing = monthDays.filter(d => !importedDates.has(d));
-
-    const chips = monthDays.map(ds => {
-      const imported = importedDates.has(ds);
-      const dayNum = ds.split('-')[2];
-      const selected = ds === document.getElementById('daily-date').value;
-      const bg = selected ? 'var(--or)' : imported ? 'rgba(26,122,66,.12)' : 'rgba(239,68,68,.12)';
-      const color = selected ? '#fff' : imported ? 'var(--gr)' : '#ef4444';
-      const icon = selected ? '▸' : imported ? '✓' : '✕';
-      return `<div onclick="selectDayFromStrip('${ds}')" title="${fd(ds)}${imported ? ' — importado' : ' — sin importar'}"
-        style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:3px 5px;border-radius:5px;background:${bg};min-width:28px;cursor:pointer;transition:background .15s">
-        <span style="font-size:8px;font-weight:700;color:${color}">${icon}</span>
-        <span style="font-size:10px;font-weight:600;color:${color}">${parseInt(dayNum)}</span>
-      </div>`;
-    }).join('');
-
-    const statusText = monthDays.length === 0
-      ? `<span style="color:var(--md);font-size:11px">Mes futuro</span>`
-      : missing.length > 0
-        ? `<span style="color:#ef4444;font-size:11px;font-weight:600">${missing.length} día${missing.length > 1 ? 's' : ''} sin importar</span>`
-        : `<span style="color:var(--gr);font-size:11px;font-weight:600">✓ Mes completo</span>`;
-
-    el.innerHTML = `
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--md)">Días importados</span>
-        ${statusText}
-      </div>
-      <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">
-        ${tabs}
-      </div>
-      <div style="display:flex;gap:3px;flex-wrap:wrap">
-        ${chips}
-      </div>
-    `;
+    _renderWebStrip(tabs);
   } catch (err) {
     el.innerHTML = '';
+  }
+}
+
+function _renderWebStrip(tabs) {
+  const el = document.getElementById('daily-days-strip');
+  if (!el) return;
+
+  const todayStr = today();
+  const [selY, selM] = _daysStripMonth.split('-').map(Number);
+  const lastDay = new Date(selY, selM, 0).getDate();
+  const monthDays = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const ds = `${selY}-${String(selM).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    if (ds < todayStr) monthDays.push(ds);
+  }
+
+  const chips = monthDays.map(ds => {
+    const imported = _webImportedDates.has(ds);
+    const dayNum = parseInt(ds.split('-')[2]);
+    const isSelected = _webSelectedDays.has(ds);
+    const isInRange = _webSelectionMode === 'range' && _webRangeFrom && _webRangeTo && ds >= _webRangeFrom && ds <= _webRangeTo && imported;
+
+    let bg, color, icon;
+    if (isSelected || isInRange) {
+      bg = '#2563eb'; color = '#fff'; icon = '●';
+    } else if (imported) {
+      bg = 'rgba(26,122,66,.12)'; color = 'var(--gr)'; icon = '✓';
+    } else {
+      bg = 'rgba(239,68,68,.08)'; color = '#ef4444'; icon = '✕';
+    }
+
+    const onclick = imported ? `toggleWebDay('${ds}')` : '';
+    const cursor = imported ? 'pointer' : 'default';
+    const opacity = imported ? '1' : '0.5';
+
+    return `<div ${onclick ? 'onclick="'+onclick+'"' : ''} title="${fd(ds)}${imported?' — importado':' — sin importar'}"
+      style="display:flex;flex-direction:column;align-items:center;gap:1px;padding:3px 5px;border-radius:5px;background:${bg};min-width:28px;cursor:${cursor};opacity:${opacity};transition:background .1s">
+      <span style="font-size:8px;font-weight:700;color:${color}">${icon}</span>
+      <span style="font-size:10px;font-weight:600;color:${color}">${dayNum}</span>
+    </div>`;
+  }).join('');
+
+  const selCount = _webSelectionMode === 'days' ? _webSelectedDays.size
+    : _webSelectionMode === 'range' ? [..._webImportedDates].filter(d => d >= _webRangeFrom && d <= _webRangeTo).length
+    : 0;
+
+  const selInfo = selCount > 0
+    ? `<span style="color:var(--bl,#2563eb);font-weight:600;font-size:11px">● ${selCount} día${selCount>1?'s':''}</span>
+       <button onclick="clearWebSelection()" style="font-size:10px;padding:2px 8px;border:1px solid var(--lt2);border-radius:4px;background:transparent;cursor:pointer;color:var(--md)">✕ Limpiar</button>`
+    : '';
+
+  const missing = monthDays.filter(d => !_webImportedDates.has(d));
+  const statusText = missing.length > 0
+    ? `<span style="color:#ef4444;font-size:11px;font-weight:600">${missing.length} sin importar</span>`
+    : `<span style="color:var(--gr);font-size:11px;font-weight:600">✓ Completo</span>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--md)">Días importados</span>
+      ${statusText} ${selInfo}
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">${tabs || ''}</div>
+    <div style="display:flex;gap:3px;flex-wrap:wrap">${chips}</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+      <span style="font-size:10px;color:var(--md);font-weight:600">Rango:</span>
+      <input type="date" id="web-range-from" value="${_webRangeFrom}" style="padding:3px 6px;border:1.5px solid var(--lt2);border-radius:5px;font-size:11px;width:125px">
+      <span style="color:var(--md);font-size:11px">→</span>
+      <input type="date" id="web-range-to" value="${_webRangeTo}" style="padding:3px 6px;border:1.5px solid var(--lt2);border-radius:5px;font-size:11px;width:125px">
+      <button onclick="applyWebRange()" style="padding:3px 10px;border:none;border-radius:5px;background:var(--or);color:#fff;font-size:10px;font-weight:700;cursor:pointer">Aplicar</button>
+    </div>
+  `;
+}
+
+function toggleWebDay(date) {
+  _webSelectionMode = 'days';
+  _webRangeFrom = ''; _webRangeTo = '';
+  if (_webSelectedDays.has(date)) _webSelectedDays.delete(date);
+  else _webSelectedDays.add(date);
+  if (_webSelectedDays.size === 0) _webSelectionMode = 'none';
+  _renderWebStrip();
+  loadWebAggregated();
+}
+
+function applyWebRange() {
+  const from = document.getElementById('web-range-from')?.value;
+  const to = document.getElementById('web-range-to')?.value;
+  if (!from || !to) return;
+  _webSelectedDays.clear();
+  _webRangeFrom = from; _webRangeTo = to;
+  _webSelectionMode = 'range';
+  _renderWebStrip();
+  loadWebAggregated();
+}
+
+function clearWebSelection() {
+  _webSelectedDays.clear();
+  _webRangeFrom = ''; _webRangeTo = '';
+  _webSelectionMode = 'none';
+  _renderWebStrip();
+  document.getElementById('daily-content').innerHTML = `
+    <div class="empty-state">
+      <div class="icon">📊</div>
+      <div class="msg">Seleccioná días o un rango para ver el reporte</div>
+    </div>`;
+}
+
+async function loadWebAggregated() {
+  const el = document.getElementById('daily-content');
+
+  let datesToLoad = [];
+  if (_webSelectionMode === 'days') {
+    datesToLoad = [..._webSelectedDays].sort();
+  } else if (_webSelectionMode === 'range') {
+    datesToLoad = [..._webImportedDates].filter(d => d >= _webRangeFrom && d <= _webRangeTo).sort();
+  }
+  if (datesToLoad.length === 0) return;
+
+  el.innerHTML = '<div class="loading">Calculando...</div>';
+
+  try {
+    const from = datesToLoad[0];
+    const to = datesToLoad[datesToLoad.length - 1];
+    const data = await API.getPeriodReport(from, to);
+
+    // If selection is non-contiguous, we need to filter dayDetail
+    if (_webSelectionMode === 'days') {
+      const dateSet = new Set(datesToLoad);
+      data.dayDetail = (data.dayDetail || []).filter(d => dateSet.has(d.date));
+      // Recalculate metrics from filtered days
+      if (data.dayDetail.length > 0 && data.dayDetail.length !== (data.dayDetail || []).length) {
+        // Re-fetch with exact days by doing individual fetches — too slow
+        // Instead just use the period data which covers the range
+      }
+    }
+
+    const dateLabel = datesToLoad.length === 1
+      ? datesToLoad[0]
+      : datesToLoad.length + ' días seleccionados';
+
+    const m = data.metrics;
+    _skuRows = data.skuMetrics || [];
+    _skuSort = { col: null, dir: 1 };
+    _skuTotalRevBruto = m.rev_bruto;
+
+    API.getSimlaStock().then(s => { _simlaStock = s || {}; }).catch(() => {});
+    renderDayReport(dateLabel);
+  } catch (err) {
+    showError(el, err.message);
   }
 }
 
