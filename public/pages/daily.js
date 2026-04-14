@@ -404,24 +404,6 @@ async function renderDayReport(date, prefixHtml = '', preloadedData = null) {
     el.innerHTML = prefixHtml + `
     <div id="daily-export-area">
 
-    <!-- ── Cabecera ── -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:10px 14px;background:var(--lt2);border-radius:8px">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:20px">📊</span>
-        <div>
-          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--md)">Reporte diario — Shopify</div>
-          <div style="font-size:20px;font-weight:800;line-height:1.15">${fd(date)}</div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <button class="btn btn-secondary btn-sm" onclick="exportDailyJpg('${date}')">📷 Exportar JPG</button>
-        <div style="text-align:right;font-size:10px;color:var(--md)">
-          <div>Jupplies Reports</div>
-          <div>${new Date().toLocaleString('es-ES', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}</div>
-        </div>
-      </div>
-    </div>
-
     <!-- ══ FACTURACIÓN + RESULTADO ══ -->
     <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px">
 
