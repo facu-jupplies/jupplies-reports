@@ -152,7 +152,14 @@ function invalidateCache() {
  * @param {string} site   Canal: '000-amz' (Shopify), 'tik-tok-shop' (TTS), 'jup-amazon', etc.
  * @returns {Array} pedidos normalizados con SKU, cantidad, precio, tipo de pago
  */
-async function fetchSimlaOrders(date, site = '000-amz') {
+/**
+ * @param {string} date YYYY-MM-DD
+ * @param {string} site Canal de Simla
+ * @param {Object} opts Opciones
+ * @param {boolean} opts.recoverCancelledPrice Si true, cancelados usan initialPrice (para Shopify COD). Si false, cancelados = €0 (para TTS).
+ */
+async function fetchSimlaOrders(date, site = '000-amz', opts = {}) {
+  const { recoverCancelledPrice = (site === '000-amz') } = opts;
   const apiKey = getSimlaApiKey();
   if (!apiKey) throw new Error('Simla API key no configurada. Ir a Configuración.');
 
@@ -177,7 +184,9 @@ async function fetchSimlaOrders(date, site = '000-amz') {
       // Los incluimos con el precio original para que la facturación bruta sea correcta
       // (el % de efectividad COD ya descuenta los que no se cobran)
       const isCancelled = (order.status || '').toLowerCase().includes('cancel');
-      const originalTotal = isCancelled
+      // Shopify web: recuperar precio original de cancelados (para métricas COD)
+      // TTS: cancelados = €0 (la facturación real es lo que dice Simla)
+      const originalTotal = (isCancelled && recoverCancelledPrice)
         ? (order.items || []).reduce((s, i) => s + (i.initialPrice || 0) * (i.quantity || 1), 0)
         : 0;
 
