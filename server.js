@@ -167,8 +167,8 @@ app.post('/api/simla/sync', async (req, res) => {
   try {
     const { syncSimlaCosts, invalidateCache } = require('./src/services/simlaService');
     invalidateCache();
-    const updated = await syncSimlaCosts();
-    res.json({ ok: true, updated });
+    const result = await syncSimlaCosts();
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

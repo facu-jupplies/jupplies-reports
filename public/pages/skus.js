@@ -55,44 +55,49 @@ function renderSkus() {
         : ''}
     </div>
     <div class="table-wrap">
-      <table style="font-size:13px;width:100%">
+      <table style="font-size:12px;width:100%;table-layout:fixed">
         <colgroup>
-          <col style="width:25%">
-          <col style="width:12%">
-          <col style="width:8%">
-          <col style="width:14%">
-          <col style="width:14%">
-          <col style="width:14%">
-          <col style="width:80px">
+          <col style="width:15%"><col style="width:10%"><col style="width:5%">
+          <col style="width:8%"><col style="width:7%"><col style="width:12%">
+          <col style="width:8%"><col style="width:8%"><col style="width:7%">
+          <col style="width:7%"><col style="width:60px">
         </colgroup>
         <thead>
           <tr>
-            ${thSort('sku',          'SKU')}
-            ${thSort('grupo',        'Grupo')}
-            <th style="font-size:11px">Tipo</th>
-            ${thSort('cost',         'Costo (€)')}
-            ${thSort('shipping_es',  'Envío ES (€)')}
-            ${thSort('shipping_int', 'Envío INT (€)')}
+            ${thSort('sku',         'SKU')}
+            ${thSort('grupo',       'Grupo')}
+            <th style="font-size:10px">Tipo</th>
+            ${thSort('cost',        'COGS')}
+            ${thSort('stock',       'Stock')}
+            <th style="font-size:10px">Peso / Dim.</th>
+            ${thSort('shipping_es', 'Envío ES')}
+            <th style="font-size:10px">Envío TTS</th>
+            ${thSort('shipping_int','Envío INT')}
+            <th style="font-size:10px">Simla</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          ${filtered.map(s => `
+          ${filtered.map(s => {
+            const dim = (s.weight || s.length) ? `${s.weight||0}kg ${s.length||0}×${s.width||0}×${s.height||0}` : '—';
+            const stockColor = s.stock > 50 ? 'var(--gr)' : s.stock > 0 ? 'var(--or)' : 'var(--re)';
+            return `
             <tr style="height:32px">
-              <td style="padding:3px 10px;font-weight:700;color:var(--or)">${s.sku}</td>
-              <td style="padding:3px 10px;color:#4a9eff;font-size:12px">${s.grupo || '<span style="opacity:.3">—</span>'}</td>
-              <td style="padding:3px 8px">${s.is_upsell ? '<span style="background:#f59e0b;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">UP</span>' : ''}</td>
-              <td style="padding:3px 10px;text-align:right">${fe(s.cost)}</td>
-              <td style="padding:3px 10px;text-align:right">${fe(s.shipping_es)}</td>
-              <td style="padding:3px 10px;text-align:right">${fe(s.shipping_int)}</td>
-              <td style="padding:3px 6px;text-align:center;white-space:nowrap">
-                <button onclick="editSku('${s.sku}')" title="Editar"
-                  style="background:none;border:none;cursor:pointer;font-size:13px;opacity:.55;padding:1px 4px">✏️</button>
-                <button onclick="deleteSku('${s.sku}')" title="Eliminar"
-                  style="background:none;border:none;cursor:pointer;font-size:14px;opacity:.6;padding:2px 5px">🗑</button>
+              <td style="padding:3px 10px;font-weight:700;color:var(--or);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.sku}">${s.sku}</td>
+              <td style="padding:3px 10px;color:#4a9eff;font-size:11px">${s.grupo || '<span style="opacity:.3">—</span>'}</td>
+              <td style="padding:3px 4px;text-align:center">${s.is_upsell ? '<span style="background:#f59e0b;color:#fff;padding:1px 4px;border-radius:3px;font-size:8px;font-weight:700">UP</span>' : ''}</td>
+              <td style="padding:3px 8px;text-align:right">${fe(s.cost)}</td>
+              <td style="padding:3px 8px;text-align:right;color:${stockColor};font-weight:600">${s.stock || 0}</td>
+              <td style="padding:3px 6px;font-size:10px;color:var(--md)">${dim}</td>
+              <td style="padding:3px 8px;text-align:right">${fe(s.shipping_es)}</td>
+              <td style="padding:3px 8px;text-align:right">${fe(s.shipping_tts || 3.10)}</td>
+              <td style="padding:3px 8px;text-align:right">${fe(s.shipping_int)}</td>
+              <td style="padding:3px 4px;text-align:center">${s.cost > 0 ? '<span style="color:var(--gr);font-size:10px">✓</span>' : '<span style="color:var(--md);font-size:10px">—</span>'}</td>
+              <td style="padding:3px 4px;text-align:center;white-space:nowrap">
+                <button onclick="editSku('${s.sku}')" title="Editar" style="background:none;border:none;cursor:pointer;font-size:12px;opacity:.55;padding:1px 3px">✏️</button>
               </td>
-            </tr>
-          `).join('')}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -166,6 +171,22 @@ async function deleteAllSkus() {
     await loadSkus();
   } catch (err) {
     alert('Error: ' + err.message);
+  }
+}
+
+async function syncSimla(btn) {
+  const orig = btn.textContent;
+  btn.textContent = '⏳ Sincronizando...';
+  btn.disabled = true;
+  try {
+    const result = await API.syncSimlaCosts();
+    btn.textContent = `✓ ${result.updated} actualizados, ${result.inserted} nuevos`;
+    await loadSkus();
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  } catch (err) {
+    btn.textContent = '✕ Error';
+    alert('Error: ' + err.message);
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
   }
 }
 

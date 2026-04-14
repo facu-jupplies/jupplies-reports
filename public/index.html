@@ -115,7 +115,7 @@
              style="padding:7px 12px;border:1.5px solid var(--lt2);border-radius:6px;font-size:13px;flex:1;min-width:180px;max-width:300px"
              oninput="renderSkus()">
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto">
-        <button class="btn btn-secondary btn-sm" onclick="downloadSkuTemplate()" title="Descargar CSV de ejemplo con el formato correcto">↓ Plantilla</button>
+        <button class="btn btn-primary btn-sm" onclick="syncSimla(this)" title="Sincronizar costos, stock, peso y dimensiones desde Simla">🔄 Sync Simla</button>
         <button class="btn btn-secondary btn-sm" onclick="exportSkusCsv()" title="Exportar todos los SKUs actuales como CSV">↓ Exportar</button>
         <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="Importar CSV — actualiza existentes, agrega nuevos, mantiene los que no están en el archivo">
           ↑ Importar CSV

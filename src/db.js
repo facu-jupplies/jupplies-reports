@@ -330,6 +330,14 @@ function initSchema(db) {
   // line_position: 0 = SKU principal del pedido, 1+ = upsell (orden de línea en Shopify)
   try { db.exec('ALTER TABLE orders ADD COLUMN line_position INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
+  // Migraciones SKU — campos de Simla + envío calculado
+  try { db.exec('ALTER TABLE skus ADD COLUMN weight REAL DEFAULT 0'); } catch (_) {}
+  try { db.exec('ALTER TABLE skus ADD COLUMN length REAL DEFAULT 0'); } catch (_) {}
+  try { db.exec('ALTER TABLE skus ADD COLUMN width REAL DEFAULT 0'); } catch (_) {}
+  try { db.exec('ALTER TABLE skus ADD COLUMN height REAL DEFAULT 0'); } catch (_) {}
+  try { db.exec('ALTER TABLE skus ADD COLUMN stock INTEGER DEFAULT 0'); } catch (_) {}
+  try { db.exec('ALTER TABLE skus ADD COLUMN shipping_tts REAL DEFAULT 3.10'); } catch (_) {}
+
   // Migraciones TTS history
   try { db.exec('ALTER TABLE tts_history ADD COLUMN gross_profit REAL DEFAULT 0'); } catch (_) {}
   try { db.exec('ALTER TABLE tts_history_grupos ADD COLUMN display_name TEXT'); } catch (_) {}

@@ -55,22 +55,25 @@ async function fetchSimlaProducts() {
         const isMaster = product.name?.trim().toUpperCase() === article;
 
         if (isMaster && offer.purchasePrice > 0) {
-          // Producto maestro con precio: siempre gana
           skuMap.set(article, {
             cost: offer.purchasePrice,
             stock: Math.max(offer.quantity || 0, skuMap.get(article)?.stock || 0),
+            weight: offer.weight || skuMap.get(article)?.weight || 0,
+            length: offer.length || skuMap.get(article)?.length || 0,
+            width: offer.width || skuMap.get(article)?.width || 0,
+            height: offer.height || skuMap.get(article)?.height || 0,
           });
         } else if (isMaster && !skuMap.has(article)) {
-          // Producto maestro sin precio: guardar al menos el stock
           skuMap.set(article, {
-            cost: 0,
-            stock: offer.quantity || 0,
+            cost: 0, stock: offer.quantity || 0,
+            weight: offer.weight || 0, length: offer.length || 0,
+            width: offer.width || 0, height: offer.height || 0,
           });
         } else if (!skuMap.has(article) && offer.purchasePrice > 0) {
-          // Fallback: si no hay maestro, usar el primer listing con precio
           skuMap.set(article, {
-            cost: offer.purchasePrice,
-            stock: offer.quantity || 0,
+            cost: offer.purchasePrice, stock: offer.quantity || 0,
+            weight: offer.weight || 0, length: offer.length || 0,
+            width: offer.width || 0, height: offer.height || 0,
           });
         }
       }
@@ -114,27 +117,78 @@ async function getSimlaStockMap() {
  *
  * @returns {number} cantidad de SKUs actualizados
  */
+/**
+ * Calcula el costo de envío España con Correos Express.
+ * Peso facturable = max(peso_real_kg, L_m × A_m × H_m × 170)
+ */
+function calcShippingES(weight, length, width, height) {
+  if (!weight && !length) return 0;
+  // Dimensiones en cm → metros
+  const volWeight = (length / 100) * (width / 100) * (height / 100) * 170;
+  const billable = Math.max(weight || 0, volWeight);
+  if (billable <= 0) return 0;
+
+  // Tarifa Correos Express España
+  if (billable <= 1)  return 2.88;
+  if (billable <= 3)  return 3.27;
+  if (billable <= 5)  return 3.51;
+  if (billable <= 7)  return 4.18;
+  if (billable <= 10) return 4.98;
+  if (billable <= 15) return 6.18;
+  if (billable <= 20) return 7.54;
+  if (billable <= 25) return 8.97;
+  if (billable <= 30) return 10.93;
+  if (billable <= 40) return 13.88;
+  // Más de 40kg: base 40kg + €0.33/kg extra
+  return 13.88 + (billable - 40) * 0.33;
+}
+
+/**
+ * Sincroniza datos de Simla → tabla local skus.
+ * Actualiza: cost, weight, length, width, height, stock, shipping_es, shipping_tts
+ * Agrega SKUs nuevos que están en Simla pero no en la DB local.
+ * NO toca: grupo, is_upsell (esos son manuales).
+ */
 async function syncSimlaCosts() {
   const simlaMap = await fetchSimlaProducts();
   const db = getDb();
 
-  const localSkus = db.prepare('SELECT sku, cost FROM skus').all();
-  const stmt = db.prepare('UPDATE skus SET cost = ?, updated_at = datetime("now") WHERE sku = ?');
+  const localSkus = db.prepare('SELECT sku FROM skus').all();
+  const localSet = new Set(localSkus.map(s => s.sku));
 
-  let updated = 0;
-  const updateAll = db.transaction(() => {
-    for (const local of localSkus) {
-      const simla = simlaMap.get(local.sku);
-      if (simla && simla.cost > 0 && Math.abs(simla.cost - local.cost) > 0.01) {
-        stmt.run(simla.cost, local.sku);
+  const stmtUpdate = db.prepare(`
+    UPDATE skus SET cost = ?, weight = ?, length = ?, width = ?, height = ?,
+    stock = ?, shipping_es = ?, shipping_tts = 3.10, updated_at = datetime('now')
+    WHERE sku = ?
+  `);
+
+  const stmtInsert = db.prepare(`
+    INSERT OR IGNORE INTO skus (sku, cost, weight, length, width, height, stock, shipping_es, shipping_tts, grupo, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 3.10, '', datetime('now'))
+  `);
+
+  let updated = 0, inserted = 0;
+  const syncAll = db.transaction(() => {
+    for (const [sku, simla] of simlaMap) {
+      if (simla.cost <= 0 && simla.stock <= 0) continue; // skip empty entries
+
+      const shippingES = calcShippingES(simla.weight, simla.length, simla.width, simla.height);
+
+      if (localSet.has(sku)) {
+        stmtUpdate.run(simla.cost, simla.weight, simla.length, simla.width, simla.height,
+          simla.stock, shippingES, sku);
         updated++;
+      } else {
+        stmtInsert.run(sku, simla.cost, simla.weight, simla.length, simla.width, simla.height,
+          simla.stock, shippingES);
+        inserted++;
       }
     }
   });
 
-  updateAll();
-  if (updated > 0) console.log(`[Simla] Sincronizados ${updated} costos de producto`);
-  return updated;
+  syncAll();
+  console.log(`[Simla] Sync: ${updated} actualizados, ${inserted} nuevos`);
+  return { updated, inserted };
 }
 
 /**
