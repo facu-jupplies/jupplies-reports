@@ -1304,13 +1304,13 @@ function renderTTSReport(date, result) {
       <!-- Columna 1: Top Afiliados -->
       <div class="card" style="padding:12px">
         <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Afiliados</div>
-        <div style="max-height:320px;overflow:hidden" id="tts-top-afil">${_buildTopAffiliates(10)}</div>
+        <div style="max-height:300px;overflow-y:auto" id="tts-top-afil">${_buildTopAffiliates(50)}</div>
       </div>
 
       <!-- Columna 2: Top Videos -->
       <div class="card" style="padding:12px">
         <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Videos</div>
-        <div style="max-height:320px;overflow:hidden" id="tts-top-videos">${_buildTopVideos(10)}</div>
+        <div style="max-height:300px;overflow-y:auto" id="tts-top-videos">${_buildTopVideos(50)}</div>
       </div>
 
       <!-- Columna 2: Distribución de pedidos + estructura P&L -->
