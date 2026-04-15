@@ -359,7 +359,7 @@ function parseTTSAffiliateCSV(text) {
   // ─── Creador y tipo de contenido
   const colCreator = headerNorm.findIndex(h => h.includes('creador') || h.includes('creator'));
   const colContentType = headerNorm.findIndex(h => h.includes('tipo') && h.includes('contenido'));
-  const colContentId = headerNorm.findIndex(h => h.includes('id') && h.includes('contenido'));
+  const colContentId = headerNorm.findIndex(h => h.startsWith('id') && h.includes('contenido'));
   // ─── Cantidad
   const colQuantity = headerNorm.findIndex(h =>
     h === 'cantidad' || h === 'quantity' || h.includes('unidades') || h === 'qty'
