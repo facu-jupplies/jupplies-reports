@@ -257,8 +257,11 @@ function classifyOrders(orders, affiliateRows) {
     const noApto = String(af.orderStatus || '').toLowerCase().includes('no apt');
     if (refunded || noApto) continue;
 
-    const sku = (af.skus?.[0] || af.sellerSku || '').toUpperCase().trim();
-    if (!sku) continue;
+    const rawSku = (af.skus?.[0] || af.sellerSku || '').toUpperCase().trim();
+    if (!rawSku) continue;
+    // Parsear multi-SKU y quitar *N (ej: ESNT-BLA*1 → ESNT-BLA)
+    const parsed = parseSku(rawSku);
+    const sku = parsed[0]?.sku || rawSku;
 
     if (!skuStats[sku]) skuStats[sku] = { paid: 0, org: 0, commPaid: 0, commOrg: 0 };
 
