@@ -357,6 +357,7 @@ function parseTTSAffiliateCSV(text) {
   // ─── Creador y tipo de contenido
   const colCreator = headerNorm.findIndex(h => h.includes('creador') || h.includes('creator'));
   const colContentType = headerNorm.findIndex(h => h.includes('tipo') && h.includes('contenido'));
+  const colContentId = headerNorm.findIndex(h => h.includes('id') && h.includes('contenido'));
   // ─── Cantidad
   const colQuantity = headerNorm.findIndex(h =>
     h === 'cantidad' || h === 'quantity' || h.includes('unidades') || h === 'qty'
@@ -407,6 +408,7 @@ function parseTTSAffiliateCSV(text) {
       productName:      (get(colProductName) || '').trim(),
       creatorName:      (get(colCreator) || '').trim(),
       contentType:      (get(colContentType) || '').trim(),
+      contentId:        (get(colContentId) || '').trim(),
       quantity:         qty,
     });
   }
@@ -1048,7 +1050,7 @@ function sortTTSPL(col) {
   });
 }
 
-function _buildTopAffiliates() {
+function _buildTopAffiliates(limit = 10) {
   if (_ttsAffiliateRows.length === 0) {
     return `<div style="font-size:12px;color:var(--md);padding:10px 0;text-align:center">Sin datos de afiliados</div>`;
   }
@@ -1061,9 +1063,14 @@ function _buildTopAffiliates() {
     const refunded = af.fullyRefunded;
     if (refunded) continue;
 
-    if (!creators[name]) creators[name] = { orders: 0, revenue: 0, commission: 0, paid: 0, organic: 0, noApto: 0, contentType: af.contentType || '' };
+    if (!creators[name]) creators[name] = { orders: 0, revenue: 0, commission: 0, paid: 0, organic: 0, noApto: 0, contentType: af.contentType || '', videos: {} };
     creators[name].orders++;
     creators[name].revenue += af.settlementAmount || 0;
+    // Track ventas por video
+    if (af.contentId) {
+      if (!creators[name].videos[af.contentId]) creators[name].videos[af.contentId] = 0;
+      creators[name].videos[af.contentId]++;
+    }
 
     if (noApto) { creators[name].noApto++; continue; }
 
@@ -1075,35 +1082,94 @@ function _buildTopAffiliates() {
   }
 
   const sorted = Object.entries(creators)
-    .map(([name, d]) => ({ name, ...d }))
+    .map(([name, d]) => {
+      // Top video = el que más ventas generó
+      const topVideo = Object.entries(d.videos).sort((a, b) => b[1] - a[1])[0];
+      return { name, ...d, topVideoId: topVideo?.[0] || '', topVideoSales: topVideo?.[1] || 0 };
+    })
     .sort((a, b) => b.orders - a.orders)
-    .slice(0, 10);
+    .slice(0, limit);
 
   if (sorted.length === 0) {
     return `<div style="font-size:12px;color:var(--md);padding:10px 0;text-align:center">Sin afiliados activos</div>`;
   }
 
-  return sorted.map((c, i) => {
+  const rows = sorted.map((c, i) => {
     const typeLabel = c.paid > 0 && c.organic > 0 ? '🎯+🤝'
       : c.paid > 0 ? '🎯 Paid' : '🤝 Org.';
     const typeColor = c.paid > 0 ? '#f59e0b' : '#8b5cf6';
     return `
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
-        <div style="width:18px;height:18px;border-radius:50%;background:${typeColor};color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
+      <div style="display:flex;align-items:center;gap:6px;padding:4px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
+        <div style="width:16px;height:16px;border-radius:50%;background:${typeColor};color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
         <div style="flex:1;min-width:0">
-          <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}" target="_blank" style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--dk);text-decoration:none" onmouseover="this.style.color='#fe2c55'" onmouseout="this.style.color='var(--dk)'">${c.name}</a>
-          <div style="font-size:9px;color:var(--md)">${typeLabel} · ${c.contentType || '—'}</div>
+          <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}" target="_blank" style="font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--dk);text-decoration:none" onmouseover="this.style.color='#fe2c55'" onmouseout="this.style.color='var(--dk)'">${c.name}</a>
+          <div style="font-size:8px;color:var(--md)">${typeLabel}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:12px;font-weight:700">${c.orders} ped.</div>
-          <div style="font-size:10px;color:var(--md)">${fe(c.revenue)}</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0;min-width:50px">
-          <div style="font-size:10px;color:var(--re);font-weight:600">${fe(c.commission)}</div>
-          <div style="font-size:9px;color:var(--md)">comisión</div>
+          <div style="font-size:11px;font-weight:700">${c.orders}</div>
+          <div style="font-size:9px;color:var(--md)">${fe(c.revenue)}</div>
         </div>
       </div>`;
   }).join('');
+
+  const totalCreators = Object.keys(creators).length;
+  const expandAfil = totalCreators > limit ? `
+    <div style="text-align:center;margin-top:4px">
+      <span onclick="document.getElementById('tts-top-afil').style.maxHeight='none';this.remove();"
+        style="font-size:10px;color:#fe2c55;cursor:pointer;font-weight:600">Ver ${totalCreators - limit} más ▾</span>
+    </div>` : '';
+
+  return rows + expandAfil;
+}
+
+function _buildTopVideos(limit = 5) {
+  if (_ttsAffiliateRows.length === 0) {
+    return `<div style="font-size:11px;color:var(--md);padding:10px 0;text-align:center">Sin datos de videos</div>`;
+  }
+
+  // Agrupar por contentId
+  const videos = {};
+  for (const af of _ttsAffiliateRows) {
+    if (af.fullyRefunded) continue;
+    const vid = af.contentId;
+    if (!vid) continue;
+
+    if (!videos[vid]) videos[vid] = { creator: af.creatorName || '?', sales: 0, revenue: 0, contentType: af.contentType || '' };
+    videos[vid].sales++;
+    videos[vid].revenue += af.settlementAmount || 0;
+  }
+
+  const sorted = Object.entries(videos)
+    .map(([id, d]) => ({ id, ...d }))
+    .sort((a, b) => b.sales - a.sales);
+
+  const visible = sorted.slice(0, limit);
+  const hasMore = sorted.length > limit;
+
+  if (visible.length === 0) {
+    return `<div style="font-size:11px;color:var(--md);padding:10px 0;text-align:center">Sin videos detectados</div>`;
+  }
+
+  const rows = visible.map((v, i) => `
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
+      <div style="width:16px;height:16px;border-radius:50%;background:#fe2c55;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
+      <div style="flex:1;min-width:0">
+        <a href="https://www.tiktok.com/@${encodeURIComponent(v.creator)}/video/${v.id}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" onmouseover="this.style.color='#fe2c55'" onmouseout="this.style.color='var(--dk)'">${v.creator}</a>
+        <div style="font-size:8px;color:var(--md)">▶ ${v.contentType}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:11px;font-weight:700">${v.sales} ven.</div>
+        <div style="font-size:9px;color:var(--md)">${fe(v.revenue)}</div>
+      </div>
+    </div>`).join('');
+
+  const expandBtn = hasMore ? `
+    <div style="text-align:center;margin-top:4px">
+      <span onclick="document.getElementById('tts-top-videos').style.maxHeight='none';this.remove();"
+        style="font-size:10px;color:#fe2c55;cursor:pointer;font-weight:600">Ver ${sorted.length - limit} más ▾</span>
+    </div>` : '';
+
+  return rows + expandBtn;
 }
 
 function renderTTSReport(date, result) {
@@ -1225,12 +1291,18 @@ function renderTTSReport(date, result) {
     </div>
 
     <!-- ── 3 tarjetas: Estructura · Distribución · SKU Revenue ── -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px">
 
       <!-- Columna 1: Top Afiliados -->
-      <div class="card">
-        <div class="card-title">Top Afiliados</div>
-        ${_buildTopAffiliates()}
+      <div class="card" style="padding:12px">
+        <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Afiliados</div>
+        <div style="max-height:280px;overflow:hidden" id="tts-top-afil">${_buildTopAffiliates(5)}</div>
+      </div>
+
+      <!-- Columna 2: Top Videos -->
+      <div class="card" style="padding:12px">
+        <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Videos</div>
+        <div style="max-height:280px;overflow:hidden" id="tts-top-videos">${_buildTopVideos(5)}</div>
       </div>
 
       <!-- Columna 2: Distribución de pedidos + estructura P&L -->
