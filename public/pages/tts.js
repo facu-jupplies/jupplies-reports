@@ -185,6 +185,8 @@ function clearTTSSelection() {
 
 async function loadTTSAggregated() {
   const el = document.getElementById('tts-content');
+  // Limpiar datos de afiliados del CSV anterior (evita mezclar días)
+  _ttsAffiliateRows = [];
 
   // Determine which dates to load
   let datesToLoad = [];
