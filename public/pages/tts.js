@@ -1091,7 +1091,7 @@ function _buildTopAffiliates() {
       <div style="display:flex;align-items:center;gap:8px;padding:5px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
         <div style="width:18px;height:18px;border-radius:50%;background:${typeColor};color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</div>
+          <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}" target="_blank" style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--dk);text-decoration:none" onmouseover="this.style.color='#fe2c55'" onmouseout="this.style.color='var(--dk)'">${c.name}</a>
           <div style="font-size:9px;color:var(--md)">${typeLabel} · ${c.contentType || '—'}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
