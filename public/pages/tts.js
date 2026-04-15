@@ -1136,13 +1136,18 @@ function _buildTopVideos(limit = 5) {
     const vid = af.contentId;
     if (!vid) continue;
 
-    if (!videos[vid]) videos[vid] = { creator: af.creatorName || '?', sales: 0, revenue: 0, contentType: af.contentType || '' };
+    if (!videos[vid]) videos[vid] = { creator: af.creatorName || '?', sales: 0, revenue: 0, contentType: af.contentType || '', products: {} };
     videos[vid].sales++;
     videos[vid].revenue += af.settlementAmount || 0;
+    const prod = af.productName || af.sellerSku || '';
+    if (prod) videos[vid].products[prod] = (videos[vid].products[prod] || 0) + 1;
   }
 
   const sorted = Object.entries(videos)
-    .map(([id, d]) => ({ id, ...d }))
+    .map(([id, d]) => {
+      const topProduct = Object.entries(d.products).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+      return { id, ...d, topProduct };
+    })
     .sort((a, b) => b.sales - a.sales);
 
   const visible = sorted.slice(0, limit);
@@ -1157,7 +1162,7 @@ function _buildTopVideos(limit = 5) {
       <div style="width:16px;height:16px;border-radius:50%;background:#fe2c55;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
       <div style="flex:1;min-width:0">
         <a href="https://www.tiktok.com/@${encodeURIComponent(v.creator)}/video/${v.id}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" class="tts-link">${v.creator}</a>
-        <div style="font-size:8px;color:var(--md)">▶ ${v.contentType}</div>
+        <div style="font-size:8px;color:var(--md);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${v.topProduct}">${v.topProduct || v.contentType}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-size:11px;font-weight:700">${v.sales} ven.</div>
