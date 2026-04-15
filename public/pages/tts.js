@@ -354,6 +354,9 @@ function parseTTSAffiliateCSV(text) {
     // NO usar "ID de SKU" como fallback — es un ID interno de TikTok, no el código vendedor
     return -1;
   })();
+  // ─── Creador y tipo de contenido
+  const colCreator = headerNorm.findIndex(h => h.includes('creador') || h.includes('creator'));
+  const colContentType = headerNorm.findIndex(h => h.includes('tipo') && h.includes('contenido'));
   // ─── Cantidad
   const colQuantity = headerNorm.findIndex(h =>
     h === 'cantidad' || h === 'quantity' || h.includes('unidades') || h === 'qty'
@@ -402,6 +405,8 @@ function parseTTSAffiliateCSV(text) {
       settlementAmount: lineRevenue,
       sellerSku:        (get(colSellerSku) || '').trim().toUpperCase(),
       productName:      (get(colProductName) || '').trim(),
+      creatorName:      (get(colCreator) || '').trim(),
+      contentType:      (get(colContentType) || '').trim(),
       quantity:         qty,
     });
   }
@@ -1043,6 +1048,64 @@ function sortTTSPL(col) {
   });
 }
 
+function _buildTopAffiliates() {
+  if (_ttsAffiliateRows.length === 0) {
+    return `<div style="font-size:12px;color:var(--md);padding:10px 0;text-align:center">Sin datos de afiliados</div>`;
+  }
+
+  // Agrupar por creador
+  const creators = {};
+  for (const af of _ttsAffiliateRows) {
+    const name = af.creatorName || 'Desconocido';
+    const noApto = (af.orderStatus || '').toLowerCase().includes('no apt');
+    const refunded = af.fullyRefunded;
+    if (refunded) continue;
+
+    if (!creators[name]) creators[name] = { orders: 0, revenue: 0, commission: 0, paid: 0, organic: 0, noApto: 0, contentType: af.contentType || '' };
+    creators[name].orders++;
+    creators[name].revenue += af.settlementAmount || 0;
+
+    if (noApto) { creators[name].noApto++; continue; }
+
+    const comm = (parseFloat(af.commReal) || 0) + (parseFloat(af.commRealAds) || 0);
+    creators[name].commission += comm;
+
+    if (parseFloat(af.commPctAds) > 0) creators[name].paid++;
+    else if (parseFloat(af.commPctStandard) > 0) creators[name].organic++;
+  }
+
+  const sorted = Object.entries(creators)
+    .map(([name, d]) => ({ name, ...d }))
+    .sort((a, b) => b.orders - a.orders)
+    .slice(0, 10);
+
+  if (sorted.length === 0) {
+    return `<div style="font-size:12px;color:var(--md);padding:10px 0;text-align:center">Sin afiliados activos</div>`;
+  }
+
+  return sorted.map((c, i) => {
+    const typeLabel = c.paid > 0 && c.organic > 0 ? '🎯+🤝'
+      : c.paid > 0 ? '🎯 Paid' : '🤝 Org.';
+    const typeColor = c.paid > 0 ? '#f59e0b' : '#8b5cf6';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
+        <div style="width:18px;height:18px;border-radius:50%;background:${typeColor};color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</div>
+          <div style="font-size:9px;color:var(--md)">${typeLabel} · ${c.contentType || '—'}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:12px;font-weight:700">${c.orders} ped.</div>
+          <div style="font-size:10px;color:var(--md)">${fe(c.revenue)}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;min-width:50px">
+          <div style="font-size:10px;color:var(--re);font-weight:600">${fe(c.commission)}</div>
+          <div style="font-size:9px;color:var(--md)">comisión</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 function renderTTSReport(date, result) {
   const el = document.getElementById('tts-content');
   const { pl, summary } = result;
@@ -1164,25 +1227,10 @@ function renderTTSReport(date, result) {
     <!-- ── 3 tarjetas: Estructura · Distribución · SKU Revenue ── -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
 
-      <!-- Columna 1: Cascada P&L -->
+      <!-- Columna 1: Top Afiliados -->
       <div class="card">
-        <div class="card-title">Estructura de costos</div>
-        <table>
-          <tbody>
-            <tr><td>Facturación</td><td class="text-right font-bold">${fe(summary.gmv)}</td></tr>
-            <tr><td>− IVA (${pctOf(summary.iva)})</td><td class="text-right text-red">${fe(summary.iva)}</td></tr>
-            <tr><td>− COGS</td><td class="text-right text-red">${fe(summary.cogs)}</td></tr>
-            <tr><td>− Envíos</td><td class="text-right text-red">${fe(summary.shipping)}</td></tr>
-            <tr><td>− Comisión TikTok 9%</td><td class="text-right text-red">${fe(summary.tiktok_platform)}</td></tr>
-            <tr style="border-top:1px dashed var(--lt2)"><td>= Gross Profit</td><td class="text-right font-bold ${summary.gross_profit >= 0 ? 'text-green' : 'text-red'}">${fe(summary.gross_profit)}</td></tr>
-            <tr><td>− Comisiones afiliados</td><td class="text-right text-red">${fe(summary.commission_cost)}</td></tr>
-            <tr><td>− Ads (GMV Max)</td><td class="text-right text-red">${fe(summary.gmv_max_spend)}</td></tr>
-            <tr style="border-top:2px solid var(--lt2)">
-              <td class="font-bold">= Beneficio Neto</td>
-              <td class="text-right font-bold ${summary.net_profit >= 0 ? 'text-green' : 'text-red'}">${fe(summary.net_profit)}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="card-title">Top Afiliados</div>
+        ${_buildTopAffiliates()}
       </div>
 
       <!-- Columna 2: Distribución de pedidos + estructura P&L -->
