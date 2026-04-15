@@ -338,6 +338,22 @@ function initSchema(db) {
   try { db.exec('ALTER TABLE skus ADD COLUMN stock INTEGER DEFAULT 0'); } catch (_) {}
   try { db.exec('ALTER TABLE skus ADD COLUMN shipping_tts REAL DEFAULT 3.10'); } catch (_) {}
 
+  // Tabla de afiliados TTS (se guarda con el historial)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tts_history_affiliates (
+      date           TEXT NOT NULL,
+      creator_name   TEXT NOT NULL,
+      orders         INTEGER DEFAULT 0,
+      orders_paid    INTEGER DEFAULT 0,
+      orders_organic INTEGER DEFAULT 0,
+      revenue        REAL DEFAULT 0,
+      commission     REAL DEFAULT 0,
+      top_video_id   TEXT,
+      top_product    TEXT,
+      PRIMARY KEY (date, creator_name)
+    )
+  `);
+
   // Migraciones TTS history
   try { db.exec('ALTER TABLE tts_history ADD COLUMN gross_profit REAL DEFAULT 0'); } catch (_) {}
   try { db.exec('ALTER TABLE tts_history_grupos ADD COLUMN display_name TEXT'); } catch (_) {}

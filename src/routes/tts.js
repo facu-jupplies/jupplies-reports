@@ -168,11 +168,11 @@ router.post('/report', async (req, res) => {
 
 // ─── POST /api/tts/history/save ───────────────────────────────────────────────
 // Guarda un día de TTS en el historial.
-// Body: { date, summary: {...}, grupos: [...] }
+// Body: { date, summary: {...}, grupos: [...], affiliates: [...] }
 router.post('/history/save', (req, res) => {
   try {
     const db = getDb();
-    const { date, summary, grupos } = req.body;
+    const { date, summary, grupos, affiliates } = req.body;
 
     if (!date || !summary) {
       return res.status(400).json({ error: 'Se requiere date y summary' });
@@ -280,6 +280,19 @@ router.post('/history/save', (req, res) => {
           );
         }
       }
+
+      // Guardar afiliados
+      if (Array.isArray(affiliates) && affiliates.length > 0) {
+        db.prepare('DELETE FROM tts_history_affiliates WHERE date = ?').run(date);
+        const stmtAfil = db.prepare(`
+          INSERT INTO tts_history_affiliates (date, creator_name, orders, orders_paid, orders_organic, revenue, commission, top_video_id, top_product)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const a of affiliates) {
+          stmtAfil.run(date, a.name || '', a.orders || 0, a.paid || 0, a.organic || 0,
+            a.revenue || 0, a.commission || 0, a.topVideoId || '', a.topProduct || '');
+        }
+      }
     });
 
     saveAll();
@@ -339,7 +352,13 @@ router.get('/history', (req, res) => {
       ORDER BY date ASC, net_profit DESC
     `).all(from, to);
 
-    res.json({ summary, grupos });
+    const affiliates = db.prepare(`
+      SELECT * FROM tts_history_affiliates
+      WHERE date BETWEEN ? AND ?
+      ORDER BY date ASC, orders DESC
+    `).all(from, to);
+
+    res.json({ summary, grupos, affiliates });
   } catch (err) {
     console.error('[TTS /history]', err.message);
     res.status(500).json({ error: err.message });

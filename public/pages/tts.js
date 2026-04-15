@@ -209,6 +209,35 @@ async function loadTTSAggregated() {
     const dateSet = new Set(datesToLoad);
     const filteredSummary = data.summary.filter(d => dateSet.has(d.date));
     const filteredGrupos = data.grupos.filter(g => dateSet.has(g.date));
+    const filteredAffiliates = (data.affiliates || []).filter(a => dateSet.has(a.date));
+
+    // Reconstruir _ttsAffiliateRows desde datos guardados para que _buildTopAffiliates funcione
+    if (filteredAffiliates.length > 0) {
+      // Agregar por creador (puede haber múltiples días)
+      const byCreator = {};
+      for (const a of filteredAffiliates) {
+        if (!byCreator[a.creator_name]) byCreator[a.creator_name] = { orders: 0, paid: 0, organic: 0, revenue: 0, commission: 0, topVideoId: '', topProduct: '' };
+        const c = byCreator[a.creator_name];
+        c.orders += a.orders; c.paid += a.orders_paid; c.organic += a.orders_organic;
+        c.revenue += a.revenue; c.commission += a.commission;
+        if (!c.topVideoId && a.top_video_id) c.topVideoId = a.top_video_id;
+        if (!c.topProduct && a.top_product) c.topProduct = a.top_product;
+      }
+      // Convertir a formato compatible con _buildTopAffiliates
+      _ttsAffiliateRows = Object.entries(byCreator).flatMap(([name, c]) => {
+        const rows = [];
+        for (let i = 0; i < c.orders; i++) {
+          rows.push({
+            creatorName: name, contentId: c.topVideoId, productName: c.topProduct, contentType: 'Vídeo',
+            commPctStandard: c.organic > 0 && i < c.organic ? 16 : 0,
+            commPctAds: c.paid > 0 && i >= c.organic && i < c.organic + c.paid ? 5 : 0,
+            commReal: c.commission > 0 ? c.commission / c.orders : 0, commRealAds: 0,
+            settlementAmount: c.revenue / c.orders, fullyRefunded: false, orderStatus: '',
+          });
+        }
+        return rows;
+      });
+    }
 
     if (filteredSummary.length === 0) {
       el.innerHTML = `<div class="empty-state"><div class="icon">📅</div><div class="msg">Sin datos para los días seleccionados</div></div>`;
@@ -1466,16 +1495,47 @@ async function exportTTSJpg(date) {
 
 // ── Guardar en historial ──────────────────────────────────────────────────────
 
+function _buildAffiliateDataForSave() {
+  if (_ttsAffiliateRows.length === 0) return [];
+  const creators = {};
+  for (const af of _ttsAffiliateRows) {
+    if (af.fullyRefunded) continue;
+    const name = af.creatorName || 'Desconocido';
+    if (!creators[name]) creators[name] = { orders: 0, paid: 0, organic: 0, revenue: 0, commission: 0, videos: {}, products: {} };
+    const noApto = (af.orderStatus || '').toLowerCase().includes('no apt');
+    creators[name].orders++;
+    creators[name].revenue += af.settlementAmount || 0;
+    if (!noApto) {
+      const comm = (parseFloat(af.commReal) || 0) + (parseFloat(af.commRealAds) || 0);
+      creators[name].commission += comm;
+      if (parseFloat(af.commPctAds) > 0) creators[name].paid++;
+      else if (parseFloat(af.commPctStandard) > 0) creators[name].organic++;
+    }
+    if (af.contentId) creators[name].videos[af.contentId] = (creators[name].videos[af.contentId] || 0) + 1;
+    if (af.productName) creators[name].products[af.productName] = (creators[name].products[af.productName] || 0) + 1;
+  }
+  return Object.entries(creators).map(([name, d]) => {
+    const topVideo = Object.entries(d.videos).sort((a, b) => b[1] - a[1])[0];
+    const topProduct = Object.entries(d.products).sort((a, b) => b[1] - a[1])[0];
+    return { name, orders: d.orders, paid: d.paid, organic: d.organic, revenue: d.revenue, commission: d.commission,
+      topVideoId: topVideo?.[0] || '', topProduct: topProduct?.[0] || '' };
+  }).sort((a, b) => b.orders - a.orders);
+}
+
 async function saveTTSHistory() {
   if (!_ttsLastResult) return alert('Primero cargá un reporte');
 
   const { date, result } = _ttsLastResult;
 
   try {
+    // Build affiliate data to save
+    const affiliatesToSave = _buildAffiliateDataForSave();
+
     await API.ttsSaveHistory({
       date,
       summary: result.summary,
       grupos:  result.pl,
+      affiliates: affiliatesToSave,
     });
     // Refresh strip para mostrar el día como guardado
     await loadTTSDaysStrip();
