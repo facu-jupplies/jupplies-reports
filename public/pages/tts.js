@@ -1102,7 +1102,7 @@ function _buildTopAffiliates(limit = 10) {
       <div style="display:flex;align-items:center;gap:6px;padding:4px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
         <div style="width:16px;height:16px;border-radius:50%;background:${typeColor};color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
         <div style="flex:1;min-width:0">
-          <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}" target="_blank" style="font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--dk);text-decoration:none" onmouseover="this.style.color='#fe2c55'" onmouseout="this.style.color='var(--dk)'">${c.name}</a>
+          <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}" target="_blank" style="font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;color:var(--dk);text-decoration:none" class="tts-link">${c.name}</a>
           <div style="font-size:8px;color:var(--md)">${typeLabel}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -1154,7 +1154,7 @@ function _buildTopVideos(limit = 5) {
     <div style="display:flex;align-items:center;gap:6px;padding:4px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
       <div style="width:16px;height:16px;border-radius:50%;background:#fe2c55;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
       <div style="flex:1;min-width:0">
-        <a href="https://www.tiktok.com/@${encodeURIComponent(v.creator)}/video/${v.id}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" onmouseover="this.style.color='#fe2c55'" onmouseout="this.style.color='var(--dk)'">${v.creator}</a>
+        <a href="https://www.tiktok.com/@${encodeURIComponent(v.creator)}/video/${v.id}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" class="tts-link">${v.creator}</a>
         <div style="font-size:8px;color:var(--md)">▶ ${v.contentType}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
@@ -1215,6 +1215,7 @@ function renderTTSReport(date, result) {
   const barColor = targetMet ? '#22c55e' : (barPctReal >= 70 ? '#f59e0b' : '#ef4444');
 
   el.innerHTML = `
+  <style>.tts-link{color:var(--dk);text-decoration:none}.tts-link:hover{color:#fe2c55!important}</style>
   <div id="tts-export-area">
 
     <!-- ── Fila 1: Facturación + Beneficio ── -->
@@ -1296,13 +1297,13 @@ function renderTTSReport(date, result) {
       <!-- Columna 1: Top Afiliados -->
       <div class="card" style="padding:12px">
         <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Afiliados</div>
-        <div style="max-height:280px;overflow:hidden" id="tts-top-afil">${_buildTopAffiliates(5)}</div>
+        <div style="max-height:320px;overflow:hidden" id="tts-top-afil">${_buildTopAffiliates(10)}</div>
       </div>
 
       <!-- Columna 2: Top Videos -->
       <div class="card" style="padding:12px">
         <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Videos</div>
-        <div style="max-height:280px;overflow:hidden" id="tts-top-videos">${_buildTopVideos(5)}</div>
+        <div style="max-height:320px;overflow:hidden" id="tts-top-videos">${_buildTopVideos(10)}</div>
       </div>
 
       <!-- Columna 2: Distribución de pedidos + estructura P&L -->
