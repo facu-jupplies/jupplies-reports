@@ -144,6 +144,27 @@ function calcShippingES(weight, length, width, height) {
 }
 
 /**
+ * Costo de envío internacional TikTok Shop — España → Francia (Home delivery,
+ * envío GRATIS para el comprador → el seller paga la tarifa completa de TTS).
+ * Fuente: Rate Card TikTok Shop Sell Across EU (Nov 2025).
+ *
+ * Peso facturable = max(peso real kg, L_m × A_m × H_m × 170)
+ */
+function calcShippingInt(weight, length, width, height) {
+  if (!weight && !length) return 0;
+  const volWeight = (length / 100) * (width / 100) * (height / 100) * 170;
+  const billable  = Math.max(weight || 0, volWeight);
+  if (billable <= 0) return 0;
+
+  // TikTok Shop full fee (Home) Spain → France:
+  if (billable <=  5) return 6.76;
+  if (billable <= 10) return 8.43;
+  if (billable <= 30) return 12.59;
+  // > 30 kg: extrapolación lineal suave (~€0.40/kg extra)
+  return 12.59 + (billable - 30) * 0.40;
+}
+
+/**
  * Sincroniza datos de Simla → tabla local skus.
  * Actualiza: cost, weight, length, width, height, stock, shipping_es, shipping_tts
  * Agrega SKUs nuevos que están en Simla pero no en la DB local.
@@ -158,13 +179,13 @@ async function syncSimlaCosts() {
 
   const stmtUpdate = db.prepare(`
     UPDATE skus SET cost = ?, weight = ?, length = ?, width = ?, height = ?,
-    stock = ?, shipping_es = ?, shipping_tts = 3.10, updated_at = datetime('now')
+    stock = ?, shipping_es = ?, shipping_int = ?, shipping_tts = 3.10, updated_at = datetime('now')
     WHERE sku = ?
   `);
 
   const stmtInsert = db.prepare(`
-    INSERT OR IGNORE INTO skus (sku, cost, weight, length, width, height, stock, shipping_es, shipping_tts, grupo, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 3.10, '', datetime('now'))
+    INSERT OR IGNORE INTO skus (sku, cost, weight, length, width, height, stock, shipping_es, shipping_int, shipping_tts, grupo, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 3.10, '', datetime('now'))
   `);
 
   let updated = 0, inserted = 0;
@@ -172,23 +193,80 @@ async function syncSimlaCosts() {
     for (const [sku, simla] of simlaMap) {
       if (simla.cost <= 0 && simla.stock <= 0) continue; // skip empty entries
 
-      const shippingES = calcShippingES(simla.weight, simla.length, simla.width, simla.height);
+      const shippingES  = calcShippingES (simla.weight, simla.length, simla.width, simla.height);
+      const shippingInt = calcShippingInt(simla.weight, simla.length, simla.width, simla.height);
 
       if (localSet.has(sku)) {
         stmtUpdate.run(simla.cost, simla.weight, simla.length, simla.width, simla.height,
-          simla.stock, shippingES, sku);
+          simla.stock, shippingES, shippingInt, sku);
         updated++;
       } else {
         stmtInsert.run(sku, simla.cost, simla.weight, simla.length, simla.width, simla.height,
-          simla.stock, shippingES);
+          simla.stock, shippingES, shippingInt);
         inserted++;
       }
     }
   });
 
   syncAll();
-  console.log(`[Simla] Sync: ${updated} actualizados, ${inserted} nuevos`);
-  return { updated, inserted };
+
+  // ── Regla automática para recambios REC-XXX ─────────────────────────
+  // Los SKUs con prefijo REC- son recambios: su costo es 50% del SKU base
+  // y el envío es igual al del base. Ej: REC-SILLA-4-NEG → base SILLA-4-NEG
+  const recUpdated = applyRecRule(db);
+
+  console.log(`[Simla] Sync: ${updated} actualizados, ${inserted} nuevos, ${recUpdated} REC- recalculados`);
+  return { updated, inserted, rec_updated: recUpdated };
+}
+
+/**
+ * Aplica la regla de recambios: para cada SKU que empieza con "REC-",
+ * busca el SKU base (sin el prefijo) y setea:
+ *   cost        = base.cost * 0.5
+ *   shipping_es = base.shipping_es
+ *   weight/length/width/height = del base (para que recalculos futuros funcionen)
+ * NO toca grupo ni is_upsell.
+ */
+function applyRecRule(db) {
+  const recSkus = db.prepare(`SELECT sku FROM skus WHERE sku LIKE 'REC-%'`).all();
+  if (recSkus.length === 0) return 0;
+
+  const stmtUpdateRec = db.prepare(`
+    UPDATE skus
+    SET cost         = ?,
+        weight       = ?,
+        length       = ?,
+        width        = ?,
+        height       = ?,
+        shipping_es  = ?,
+        shipping_int = ?,
+        updated_at   = datetime('now')
+    WHERE sku = ?
+  `);
+
+  let count = 0;
+  const tx = db.transaction(() => {
+    for (const r of recSkus) {
+      const baseSku = r.sku.replace(/^REC-/, '');
+      const base = db.prepare('SELECT cost, weight, length, width, height, shipping_es, shipping_int FROM skus WHERE sku = ?').get(baseSku);
+      if (!base || !base.cost || base.cost <= 0) continue;
+
+      const halfCost = Math.round(base.cost * 0.5 * 100) / 100;
+      stmtUpdateRec.run(
+        halfCost,
+        base.weight       || 0,
+        base.length       || 0,
+        base.width        || 0,
+        base.height       || 0,
+        base.shipping_es  || 0,
+        base.shipping_int || 0,
+        r.sku
+      );
+      count++;
+    }
+  });
+  tx();
+  return count;
 }
 
 /**
@@ -365,5 +443,6 @@ module.exports = {
   getSimlaSkuInfo,
   getSimlaStockMap,
   syncSimlaCosts,
+  applyRecRule,
   invalidateCache,
 };

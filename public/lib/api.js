@@ -38,6 +38,8 @@ const API = {
   getDayReport:    (date)        => apiFetch(`/api/reports/day?date=${date}`),
   getHistory:      (from, to)    => apiFetch(`/api/reports/history?from=${from}&to=${to}`),
   getPeriodReport: (from, to)    => apiFetch(`/api/reports/period?from=${from}&to=${to}`),
+  getRealizedReport: (from, to, site = '000-amz') =>
+    apiFetch(`/api/reports/realized?from=${from}&to=${to}&site=${encodeURIComponent(site)}`),
 
   // COD
   getCod:      (params = {}) => {

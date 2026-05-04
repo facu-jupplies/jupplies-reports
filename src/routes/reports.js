@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db');
 const { calcDayMetrics, calcSkuMetrics } = require('../services/calculator');
+const { buildRealizedReport } = require('../services/realizedService');
 
 function getSettings() {
   const db = getDb();
@@ -147,6 +148,23 @@ router.get('/monthly', (req, res) => {
   };
 
   res.json({ year: y, month: m, from, to, mode, metrics, skuMetrics, codSummary });
+});
+
+// GET /api/reports/realized?from=YYYY-MM-DD&to=YYYY-MM-DD&site=000-amz
+// Reporte REAL desde Simla (estados actuales, no especulativo).
+router.get('/realized', async (req, res) => {
+  const { from, to, site = '000-amz' } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'from y to requeridos' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return res.status(400).json({ error: 'Formato de fecha inválido (YYYY-MM-DD)' });
+  }
+  try {
+    const data = await buildRealizedReport({ from, to, site });
+    res.json(data);
+  } catch (err) {
+    console.error('[reports/realized]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

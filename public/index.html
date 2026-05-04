@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Jupplies Reports</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/tts-samples.css">
 </head>
 <body>
 
@@ -33,8 +34,14 @@
     <div class="nav-item active" data-page="daily">
       <span class="icon">📊</span> Web / Shopify
     </div>
+    <div class="nav-item" data-page="realized">
+      <span class="icon">📈</span> Resultado Real
+    </div>
     <div class="nav-item" data-page="tts">
       <span class="icon">🛒</span> TikTok Shop
+    </div>
+    <div class="nav-item" data-page="tts-samples">
+      <span class="icon">🎁</span> Muestras TTS
     </div>
   </div>
 
@@ -87,6 +94,30 @@
     </div>
   </div>
 
+
+  <!-- RESULTADO REAL -->
+  <div class="page" id="page-realized">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Resultado Real</div>
+        <div class="page-subtitle">% confirmación y entrega real desde Simla — por producto</div>
+      </div>
+      <div class="flex gap-8 items-center">
+        <div class="form-group">
+          <label>Desde</label>
+          <input type="date" id="realized-from" style="width:150px">
+        </div>
+        <div class="form-group">
+          <label>Hasta</label>
+          <input type="date" id="realized-to" style="width:150px">
+        </div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" onclick="fetchRealized()">⬇ Cargar</button>
+        </div>
+      </div>
+    </div>
+    <div id="realized-content"></div>
+  </div>
 
   <!-- CAMPAÑAS → SKU -->
   <div class="page" id="page-campaigns">
@@ -200,6 +231,11 @@
     </div>
   </div>
 
+  <!-- MUESTRAS TTS (unificado: afiliados + mapeos) -->
+  <div class="page" id="page-tts-samples">
+    <div class="loading">Cargando...</div>
+  </div>
+
   <!-- CONFIGURACIÓN -->
   <div class="page" id="page-settings">
     <div class="page-header">
@@ -217,8 +253,10 @@
 <script src="/lib/api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="/pages/daily.js"></script>
 <script src="/pages/history.js"></script>
+<script src="/pages/realized.js"></script>
 <!-- dashboard.js removed — replaced by new history.js -->
 <script src="/pages/tts.js"></script>
 <script src="/pages/skus.js"></script>
@@ -226,6 +264,7 @@
 <script src="/pages/calc.js"></script>
 <script src="/pages/settings.js"></script>
 <script src="/pages/tts-history.js"></script>
+<script src="/pages/tts-samples.js"></script>
 
 <script>
 // ─── Navegación ────────────────────────────────────────
@@ -242,11 +281,13 @@ function showPage(pageId) {
   // Cargar datos de la página al navegar
   const loaders = {
     daily:        loadDaysStrip,
+    realized:     loadRealized,
     skus:         loadSkus,
     campaigns:    loadCampaigns,
     calc:         loadCalc,
     settings:     loadSettings,
     'tts':        () => { renderTTSUploadZone(); },
+    'tts-samples': loadTTSSamples,
   };
   if (loaders[pageId]) loaders[pageId]();
 }

@@ -210,14 +210,31 @@ function buildOrders(windsorRows, skuMap, affiliateByOrder = {}) {
 /**
  * Clasifica pedidos por tipo.
  *
- * Como los IDs de TikTok (CSV) y Simla no matchean, usamos totales globales:
- * del CSV contamos cuántos son paid_afiliado, afiliado org, y propio,
- * y la comisión total. Luego distribuimos entre los pedidos de Simla.
+ * Matching por GRUPO de producto (no por SKU exacto):
+ * el CSV de TikTok resuelve todas las variantes físicas a un único SKU (displayName→SKU),
+ * mientras Simla las diferencia (ESNT-BLA-60, ESNT-NEG-120, etc.). Agrupamos ambos lados
+ * por `grupo` para matchear correctamente.
+ *
+ * @param {Array}  orders         Pedidos Simla (ya con .grupo calculado)
+ * @param {Array}  affiliateRows  Filas del CSV de afiliados
+ * @param {Object} skuMap         Mapa sku → skuData (para resolver grupo del CSV)
  */
-function classifyOrders(orders, affiliateRows) {
+function classifyOrders(orders, affiliateRows, skuMap = {}) {
   if (!affiliateRows || affiliateRows.length === 0) return orders;
 
-  // 1. Del CSV, contar totales: cuántos paid_afil, org_afil + comisiones totales
+  // Helper: dado un SKU del CSV, devuelve el grupo del SKU maestro en la DB
+  function skuToGrupo(rawSku) {
+    if (!rawSku) return '';
+    const sku = rawSku.toUpperCase().trim();
+    const parsed = parseSku(sku);
+    const cleanSku = parsed[0]?.sku || sku;
+    const skuData = skuMap[cleanSku]
+      || skuMap[cleanSku.replace(/-[A-Z0-9]+$/, '-')]
+      || skuMap[cleanSku.replace(/-[A-Z0-9]+$/, '')];
+    return (skuData?.grupo || cleanSku).toUpperCase();
+  }
+
+  // 1. Del CSV, contar totales globales (debug)
   let totalPaidAfil = 0, totalOrgAfil = 0, totalOrganico = 0;
   let commTotalPaidAfil = 0, commTotalOrgAfil = 0;
 
@@ -245,8 +262,8 @@ function classifyOrders(orders, affiliateRows) {
   const totalCSV = totalPaidAfil + totalOrgAfil + totalOrganico;
   console.log(`[TTS classify] CSV: ${totalCSV} (paid_afil:${totalPaidAfil} org_afil:${totalOrgAfil} propio:${totalOrganico}) | Simla: ${orders.filter(o=>o.status==='valid').length} | Comm: paid €${commTotalPaidAfil.toFixed(2)} org €${commTotalOrgAfil.toFixed(2)}`);
 
-  // 2. Agregar por SKU: cuántos de cada tipo + comisiones totales por SKU
-  const skuStats = {}; // sku → { paid: N, org: N, commPaid: €, commOrg: € }
+  // 2. Agregar por GRUPO: cuántos de cada tipo + comisiones totales por grupo
+  const grupoStats = {}; // grupo → { paid, org, commPaid, commOrg }
 
   for (const af of affiliateRows) {
     const commPctAds      = parseFloat(af.commPctAds)      || 0;
@@ -259,45 +276,48 @@ function classifyOrders(orders, affiliateRows) {
 
     const rawSku = (af.skus?.[0] || af.sellerSku || '').toUpperCase().trim();
     if (!rawSku) continue;
-    // Parsear multi-SKU y quitar *N (ej: ESNT-BLA*1 → ESNT-BLA)
-    const parsed = parseSku(rawSku);
-    const sku = parsed[0]?.sku || rawSku;
 
-    if (!skuStats[sku]) skuStats[sku] = { paid: 0, org: 0, commPaid: 0, commOrg: 0 };
+    const grupo = skuToGrupo(rawSku);
+    if (!grupo) continue;
+
+    if (!grupoStats[grupo]) grupoStats[grupo] = { paid: 0, org: 0, commPaid: 0, commOrg: 0 };
 
     if (commPctAds > 0) {
-      skuStats[sku].paid++;
-      skuStats[sku].commPaid += commReal + commRealAds;
+      grupoStats[grupo].paid++;
+      grupoStats[grupo].commPaid += commReal + commRealAds;
     } else if (commPctStandard > 0) {
-      skuStats[sku].org++;
-      skuStats[sku].commOrg += commReal;
+      grupoStats[grupo].org++;
+      grupoStats[grupo].commOrg += commReal;
     }
   }
 
   // Debug
-  console.log('[TTS classify] skuStats:');
-  for (const [sku, s] of Object.entries(skuStats)) {
-    console.log(`  ${sku}: paid=${s.paid} org=${s.org} commPaid=${s.commPaid.toFixed(2)} commOrg=${s.commOrg.toFixed(2)}`);
+  console.log('[TTS classify] grupoStats:');
+  for (const [grupo, s] of Object.entries(grupoStats)) {
+    console.log(`  ${grupo}: paid=${s.paid} org=${s.org} commPaid=${s.commPaid.toFixed(2)} commOrg=${s.commOrg.toFixed(2)}`);
   }
 
-  // 3. Asignar tipo y comisión a cada pedido de Simla matcheando por SKU
+  // 3. Asignar tipo y comisión a cada pedido de Simla matcheando por GRUPO
   const remaining = {};
-  for (const [sku, s] of Object.entries(skuStats)) {
-    remaining[sku] = { paid: s.paid, org: s.org, commPerPaid: s.paid > 0 ? s.commPaid / s.paid : 0, commPerOrg: s.org > 0 ? s.commOrg / s.org : 0 };
+  for (const [grupo, s] of Object.entries(grupoStats)) {
+    remaining[grupo] = {
+      paid:        s.paid,
+      org:         s.org,
+      commPerPaid: s.paid > 0 ? s.commPaid / s.paid : 0,
+      commPerOrg:  s.org  > 0 ? s.commOrg  / s.org  : 0,
+    };
   }
-
-  // Fallback para pedidos sin SKU en el CSV: usar totales globales proporcionales
-  const globalRemaining = { paid: totalPaidAfil, org: totalOrgAfil };
 
   return orders.map(order => {
     if (order.status !== 'valid') return order;
 
-    const sku = order.primary_sku?.toUpperCase() || '';
-    // Buscar en remaining: exacto, sin sufijo, o genérico
-    const stat = remaining[sku]
+    const grupo = (order.grupo || '').toUpperCase();
+    // Match exacto por grupo; fallback: por SKU (compatibilidad con grupos mal configurados)
+    const sku = (order.primary_sku || '').toUpperCase();
+    const stat = remaining[grupo]
+      || remaining[sku]
       || remaining[sku.replace(/-[A-Z0-9]+$/, '-')]
-      || remaining[sku.replace(/-[A-Z0-9]+$/, '')]
-      || remaining[sku.replace(/\*\d+$/, '')];
+      || remaining[sku.replace(/-[A-Z0-9]+$/, '')];
 
     if (stat) {
       if (stat.paid > 0) {
@@ -310,8 +330,7 @@ function classifyOrders(orders, affiliateRows) {
       }
     }
 
-    // Sin match por SKU: marcar como propio (no inventar comisiones)
-    // Los pedidos que no matchean con el CSV son propios/orgánicos
+    // Sin match: pedido propio/orgánico (sin comisión)
     return { ...order, order_type: 'organico', commission_cost: 0 };
   });
 }

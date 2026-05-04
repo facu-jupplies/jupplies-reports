@@ -130,7 +130,19 @@ function requireAuth(req, res, next) {
 app.use(requireAuth);
 
 // Archivos estáticos (ahora protegidos por la sesión)
-app.use(express.static(path.join(__dirname, 'public')));
+// Servir estáticos. Forzamos no-cache en JS/CSS/HTML para que cambios
+// del frontend se vean al instante con un reload normal (sin tener que
+// hacer Cmd+Shift+R cada vez). Imágenes/fonts dejan que el browser
+// cachee normal.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(js|css|html)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  },
+}));
 
 // ─── Rutas API ────────────────────────────────────────────────────────────────
 
@@ -139,7 +151,9 @@ app.use('/api/import',   require('./src/routes/import'));
 app.use('/api/reports',  require('./src/routes/reports'));
 app.use('/api/cod',      require('./src/routes/cod'));
 app.use('/api/settings', require('./src/routes/settings'));
-app.use('/api/tts',      require('./src/routes/tts'));
+app.use('/api/tts/samples',  require('./src/routes/samples'));  // ANTES que /api/tts
+app.use('/api/tts/mappings', require('./src/routes/mappings')); // ANTES que /api/tts
+app.use('/api/tts',          require('./src/routes/tts'));
 
 // TTS saved dates (for the days strip)
 app.get('/api/tts/dates', (req, res) => {
