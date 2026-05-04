@@ -241,16 +241,21 @@ router.get('/affiliates/:handle', (req, res) => {
     const db = getDb();
     const h  = handle.toLowerCase().trim().replace(/^@/, '');
 
-    // 1. Muestras recibidas en el período
+    // 1. Muestras: TODAS las del afiliado (sin filtro de fechas).
+    //    Las muestras son atemporales para este afiliado — si recibió una en
+    //    enero, sigue siendo dueño de ese costo y de su atribución.
+    //    El campo `in_period` marca cuáles cayeron en el rango filtrado.
     const samples = db.prepare(`
       SELECT id, sent_date, approved_date, simla_order_num, simla_order_id,
              sku, all_skus, grupo, product_name, units,
              cogs, shipping_cost, customer_name
       FROM tts_samples
       WHERE tiktok_username = ?
-        AND sent_date BETWEEN ? AND ?
       ORDER BY sent_date ASC
-    `).all(h, from, to);
+    `).all(h);
+    for (const s of samples) {
+      s.in_period = (s.sent_date >= from && s.sent_date <= to);
+    }
 
     // 2. Ventas en el período
     const sales = db.prepare(`
@@ -263,6 +268,15 @@ router.get('/affiliates/:handle', (req, res) => {
         AND (fully_refunded IS NULL OR fully_refunded = 0)
       ORDER BY order_date ASC
     `).all(h, from, to);
+
+    // Marcar cada venta como matched (mismo grupo familia que alguna muestra)
+    // o no-matched (producto distinto, no atribuible a la muestra).
+    const receivedGrupos = samples.map(s => (s.grupo || '').toUpperCase()).filter(Boolean);
+    const isVentaMatched = (saleGrupo) =>
+      receivedGrupos.some(rg => matchesGroupFamily(rg, saleGrupo));
+    for (const s of sales) {
+      s.is_matched = isVentaMatched(s.grupo);
+    }
 
     // 3. Timeline: un punto por día, con muestras (eventos) y ventas agregadas
     //    sale_grupos: { GRUPO: { org, paid, revenue } } por día — para tooltip por producto
@@ -316,24 +330,44 @@ router.get('/affiliates/:handle', (req, res) => {
           .sort((a, b) => (b.org + b.paid) - (a.org + a.paid)),
       }));
 
-    // 4. Totales del afiliado en el período
-    //    Inversión = solo costo out-of-pocket (cogs + envío de muestras).
-    //    La comisión se descuenta del revenue, no es capital extra invertido.
-    //    ROIA neto = (Revenue − Comisión − Muestras) / Muestras × 100
+    // 4. Totales del afiliado:
+    //    - Muestras: total de todo el histórico (todas) + costos.
+    //    - Ventas: divididas en MATCHED (mismo grupo familia que las muestras)
+    //      y NO-MATCHED (otros productos que el afiliado vende sin que
+    //      tu muestra tenga relación causal).
+    //    - 2 ROIA:
+    //      · ROIA matched (honesto): sólo ventas matched / inversión muestras
+    //      · ROIA total (optimista): todas las ventas atribuidas al afiliado
     let totalCogs = 0, totalShip = 0;
     for (const s of samples) {
       totalCogs += s.cogs || 0;
       totalShip += s.shipping_cost || 0;
     }
-    const totalRevenue    = sales.reduce((s, r) => s + (r.revenue || 0), 0);
-    const totalCommission = sales.reduce((s, r) => s + (r.commission || 0), 0);
-    const samplesCost     = totalCogs + totalShip;
-    const beneficioNeto   = totalRevenue - totalCommission - samplesCost;
-    const roia = samplesCost > 0
-      ? round((beneficioNeto / samplesCost) * 100, 1)
+    const samplesCost = totalCogs + totalShip;
+
+    const matchedSales   = sales.filter(s => s.is_matched);
+    const unmatchedSales = sales.filter(s => !s.is_matched);
+
+    const totalRevenue       = sales.reduce((s, r) => s + (r.revenue || 0), 0);
+    const totalCommission    = sales.reduce((s, r) => s + (r.commission || 0), 0);
+    const matchedRevenue     = matchedSales.reduce((s, r) => s + (r.revenue || 0), 0);
+    const matchedCommission  = matchedSales.reduce((s, r) => s + (r.commission || 0), 0);
+    const unmatchedRevenue   = unmatchedSales.reduce((s, r) => s + (r.revenue || 0), 0);
+
+    const beneficioNetoTotal   = totalRevenue   - totalCommission   - samplesCost;
+    const beneficioNetoMatched = matchedRevenue - matchedCommission - samplesCost;
+
+    const roiaTotal = samplesCost > 0
+      ? round((beneficioNetoTotal / samplesCost) * 100, 1)
+      : null;
+    // ROIA matched solo tiene sentido si hubo ventas del grupo de la muestra
+    const roiaMatched = samplesCost > 0 && matchedSales.length > 0
+      ? round((beneficioNetoMatched / samplesCost) * 100, 1)
       : null;
 
-    // 5. Productos vendidos agregados (por grupo) — para macheo vs muestras
+    // 5. Productos vendidos agregados (por grupo) — match received↔vendido
+    //    a nivel FAMILIA. Ej recv "BANE-TER-GR;PATAS" matchea con
+    //    vendido "BANE-TER-RO;PATAS" (misma línea, distinto color).
     const soldByGroupMap = {};
     for (const s of sales) {
       const g = s.grupo || 'SIN GRUPO';
@@ -344,23 +378,67 @@ router.get('/affiliates/:handle', (req, res) => {
         revenue: 0, commission: 0,
       };
       const r = soldByGroupMap[g];
-      r.units   += 1;  // 1 pedido = 1 unidad principal (la tabla agrupa por csv_sku_id por pedido)
+      r.units   += 1;
       r.orders  += 1;
       if      (s.comm_type === 'org')  r.orders_org  += 1;
       else if (s.comm_type === 'paid') r.orders_paid += 1;
       r.revenue    += s.revenue || 0;
       r.commission += s.commission || 0;
     }
-    // Match received↔vendido a nivel FAMILIA (no exact grupo): los grupos en
-    // tts_samples y tts_affiliate_orders pueden diferir por color/variante
-    // (ej recv "BANE-TER-GR;PATAS" vs vendido "BANE-TER-RO;PATAS" — misma línea).
-    const receivedGrupos = samples.map(s => (s.grupo || '').toUpperCase()).filter(Boolean);
     const soldByGroup = Object.values(soldByGroupMap).map(r => ({
       ...r,
       revenue:    round(r.revenue),
       commission: round(r.commission),
-      received:   receivedGrupos.some(rg => matchesGroupFamily(rg, r.grupo)),
+      received:   isVentaMatched(r.grupo),
     })).sort((a, b) => b.units - a.units);
+
+    // 6. Videos del período: lista de cada video_id con sus ventas, producto
+    //    principal y flag matched (si vendió grupo de muestra recibida).
+    const videosMap = {};
+    for (const s of sales) {
+      if (!s.video_id) continue;
+      if (!videosMap[s.video_id]) videosMap[s.video_id] = {
+        video_id:    s.video_id,
+        sales:       0,
+        revenue:     0,
+        commission:  0,
+        orders_org:  0,
+        orders_paid: 0,
+        first_date:  s.order_date,
+        last_date:   s.order_date,
+        products:    {},
+        grupos:      new Set(),
+      };
+      const v = videosMap[s.video_id];
+      v.sales      += 1;
+      v.revenue    += s.revenue || 0;
+      v.commission += s.commission || 0;
+      if      (s.comm_type === 'org')  v.orders_org  += 1;
+      else if (s.comm_type === 'paid') v.orders_paid += 1;
+      if (s.product_name) v.products[s.product_name] = (v.products[s.product_name] || 0) + 1;
+      if (s.grupo) v.grupos.add(s.grupo);
+      if (s.order_date < v.first_date) v.first_date = s.order_date;
+      if (s.order_date > v.last_date)  v.last_date  = s.order_date;
+    }
+    const videos = Object.values(videosMap).map(v => {
+      const topProdEntry = Object.entries(v.products).sort((a, b) => b[1] - a[1])[0];
+      const grupos       = [...v.grupos];
+      const isMatched    = grupos.some(g => isVentaMatched(g));
+      return {
+        video_id:     v.video_id,
+        sales:        v.sales,
+        revenue:      round(v.revenue),
+        commission:   round(v.commission),
+        orders_org:   v.orders_org,
+        orders_paid:  v.orders_paid,
+        first_date:   v.first_date,
+        last_date:    v.last_date,
+        top_product:  topProdEntry?.[0] || '',
+        product_count: Object.keys(v.products).length,
+        grupos,
+        is_matched:   isMatched,
+      };
+    }).sort((a, b) => b.sales - a.sales);
 
     // 5. Nombre real desde creator_mapping (o de las muestras)
     const mapRow = db.prepare(`
@@ -369,29 +447,45 @@ router.get('/affiliates/:handle', (req, res) => {
     `).get(h);
     const customerName = mapRow?.simla_customer_name || samples[0]?.customer_name || null;
 
+    const samplesInPeriod = samples.filter(s => s.in_period).length;
+
     res.json({
       period: { from, to },
       handle: h,
       customer_name: customerName,
       totals: {
-        samples:       samples.length,
-        units:         samples.reduce((s, r) => s + (r.units || 1), 0),
-        samples_cost:  round(samplesCost),
-        cogs:          round(totalCogs),
-        shipping:      round(totalShip),
-        orders:        sales.length,
-        orders_org:    sales.filter(s => s.comm_type === 'org').length,
-        orders_paid:   sales.filter(s => s.comm_type === 'paid').length,
-        videos:        new Set(sales.map(s => s.video_id).filter(Boolean)).size,
-        facturacion:   round(totalRevenue),
-        commission:    round(totalCommission),
-        inversion:     round(samplesCost),  // solo muestras (out-of-pocket)
-        beneficio_neto: round(beneficioNeto),
-        roia,
+        // Muestras: TODO el histórico del afiliado
+        samples:           samples.length,
+        samples_in_period: samplesInPeriod,
+        units:             samples.reduce((s, r) => s + (r.units || 1), 0),
+        samples_cost:      round(samplesCost),
+        cogs:              round(totalCogs),
+        shipping:          round(totalShip),
+        // Ventas: del período filtrado
+        orders:            sales.length,
+        orders_matched:    matchedSales.length,
+        orders_unmatched:  unmatchedSales.length,
+        orders_org:        sales.filter(s => s.comm_type === 'org').length,
+        orders_paid:       sales.filter(s => s.comm_type === 'paid').length,
+        videos:            new Set(sales.map(s => s.video_id).filter(Boolean)).size,
+        facturacion:           round(totalRevenue),
+        facturacion_matched:   round(matchedRevenue),
+        facturacion_unmatched: round(unmatchedRevenue),
+        commission:            round(totalCommission),
+        commission_matched:    round(matchedCommission),
+        // Inversión + ROIAs
+        inversion:             round(samplesCost),  // muestras out-of-pocket
+        beneficio_neto:        round(beneficioNetoTotal),
+        beneficio_neto_matched: round(beneficioNetoMatched),
+        roia_total:            roiaTotal,    // todas las ventas (optimista)
+        roia_matched:          roiaMatched,  // sólo grupo de muestra (honesto)
+        // Compat con código viejo
+        roia:                  roiaTotal,
       },
       samples,
       sales,
       sold_by_group: soldByGroup,
+      videos,
       timeline,
     });
   } catch (err) {

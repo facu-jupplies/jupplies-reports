@@ -1018,44 +1018,67 @@ function renderDetailBody(d) {
   const body = document.getElementById('ttsm-detail-body');
   const t = d.totals;
 
-  // Subtitle
+  // Subtitle: aclara que muestras son del histórico total y ventas del período
   const sub = document.getElementById('ttsm-detail-subtitle');
-  if (sub) sub.textContent = d.customer_name
-    ? `${d.customer_name} · ${d.period.from} → ${d.period.to}`
-    : `${d.period.from} → ${d.period.to}`;
+  if (sub) {
+    const inPeriod = t.samples_in_period || 0;
+    const outPeriod = (t.samples || 0) - inPeriod;
+    const samplesNote = outPeriod > 0
+      ? ` · 🎁 ${t.samples} muestras totales (${inPeriod} en el período, ${outPeriod} antes)`
+      : ` · 🎁 ${t.samples} muestra${t.samples === 1 ? '' : 's'} en el período`;
+    sub.textContent = (d.customer_name ? `${d.customer_name} · ` : '') +
+                      `Ventas: ${d.period.from} → ${d.period.to}` + samplesNote;
+  }
 
-  const roiaStyle = t.roia == null ? 'color:var(--md)' :
-                    (t.roia >= 50 ? 'color:var(--gr);font-weight:700' :
-                    (t.roia >= 0  ? 'color:var(--bl);font-weight:600' : 'color:var(--re);font-weight:700'));
+  // ROIA matched (honesto) es la métrica principal. ROIA total como referencia.
+  const roiaMatched = t.roia_matched;
+  const roiaTotal   = t.roia_total;
+  const roiaMatchedStyle = roiaMatched == null ? 'color:var(--md)' :
+                    (roiaMatched >= 50 ? 'color:var(--gr);font-weight:700' :
+                    (roiaMatched >= 0  ? 'color:var(--bl);font-weight:600' : 'color:var(--re);font-weight:700'));
+
+  // Indicador de ventas matched: % sobre el total de pedidos
+  const matchedPct = t.orders > 0
+    ? Math.round((t.orders_matched / t.orders) * 100)
+    : 0;
 
   body.innerHTML = `
-  <!-- KPI cards -->
+  <!-- KPI cards: muestras (total) + pedidos + facturación + inversión + ROIA matched -->
   <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px">
-    <div class="kpi-card orange">
-      <div class="kpi-label">🎁 Muestras</div>
+    <div class="kpi-card orange" title="Total histórico de muestras del afiliado, no sólo del período filtrado.">
+      <div class="kpi-label">🎁 Muestras (total)</div>
       <div class="kpi-value">${ttsmInt(t.samples)}</div>
       <div class="kpi-sub">${ttsmInt(t.units)} unidades · ${ttsmEur(t.samples_cost)}</div>
     </div>
-    <div class="kpi-card blue">
-      <div class="kpi-label">🛒 Pedidos</div>
+    <div class="kpi-card blue" title="Pedidos en el rango. Matched = mismo grupo familia que alguna muestra recibida (atribuible). No-matched = otros productos del afiliado.">
+      <div class="kpi-label">🛒 Pedidos del período</div>
       <div class="kpi-value">${ttsmInt(t.orders)}</div>
-      <div class="kpi-sub">${t.orders_org} org · ${t.orders_paid} paid · ${t.videos} videos</div>
+      <div class="kpi-sub">
+        <span style="color:var(--gr);font-weight:600">${t.orders_matched} matched</span>
+        · ${t.orders_unmatched} otros · ${t.videos} videos
+      </div>
     </div>
-    <div class="kpi-card">
-      <div class="kpi-label">💰 Facturación</div>
-      <div class="kpi-value">${ttsmEur(t.facturacion)}</div>
-      <div class="kpi-sub">− Comisión afil.: ${ttsmEur(t.commission)}</div>
+    <div class="kpi-card" title="Facturación de ventas matched (atribuibles a la muestra) vs total.">
+      <div class="kpi-label">💰 Facturación matched</div>
+      <div class="kpi-value">${ttsmEur(t.facturacion_matched)}</div>
+      <div class="kpi-sub">
+        Total período: ${ttsmEur(t.facturacion)}
+        ${t.facturacion_unmatched > 0 ? `· otros: ${ttsmEur(t.facturacion_unmatched)}` : ''}
+      </div>
     </div>
-    <div class="kpi-card" title="Lo que sale de tu bolsillo: solo muestras (cogs + envío). La comisión sale del revenue del propio pedido, no es capital extra.">
+    <div class="kpi-card" title="Lo que sale de tu bolsillo: cogs + envío de las muestras. La comisión sale del revenue, no es capital extra.">
       <div class="kpi-label">📊 Inversión</div>
       <div class="kpi-value">${ttsmEur(t.inversion)}</div>
       <div class="kpi-sub">muestras (cogs + envío)</div>
     </div>
-    <div class="kpi-card ${t.roia == null ? '' : (t.roia >= 0 ? 'green' : 'red')}"
-         title="ROIA neto: (Facturación − Comisión − Inversión) / Inversión">
-      <div class="kpi-label">📈 ROIA neto</div>
-      <div class="kpi-value" style="${roiaStyle}">${ttsmPct(t.roia)}</div>
-      <div class="kpi-sub">benef. neto: ${ttsmEur(t.beneficio_neto)}</div>
+    <div class="kpi-card ${roiaMatched == null ? '' : (roiaMatched >= 0 ? 'green' : 'red')}"
+         title="ROIA matched (honesto): sólo ventas del mismo grupo familia que las muestras enviadas. ROIA total: todas las ventas del afiliado en el período (incluye productos no relacionados con la muestra).">
+      <div class="kpi-label">📈 ROIA matched</div>
+      <div class="kpi-value" style="${roiaMatchedStyle}">${roiaMatched == null ? '—' : ttsmPct(roiaMatched)}</div>
+      <div class="kpi-sub">
+        ${roiaTotal != null ? `total: ${ttsmPct(roiaTotal)}` : '—'}
+        ${matchedPct < 100 && t.orders > 0 ? `· ${matchedPct}% matched` : ''}
+      </div>
     </div>
   </div>
 
@@ -1079,13 +1102,94 @@ function renderDetailBody(d) {
     ${renderSoldByGroupPanel(d)}
   </div>
 
+  <!-- Videos del período: ranking de cada video con sus ventas + producto + match -->
+  ${renderVideosPanel(d)}
+
   <!-- Ventas generadas — al final, scroll a partir de 15 filas -->
   ${renderSalesPanel(d)}`;
 }
 
-// ─── Muestras recibidas (agrupadas por GRUPO) ──────────────────────────
+// ─── Videos del período ────────────────────────────────────────────────
+// Lista todos los videos (contentId) que el afiliado usó para vender en el
+// rango. Si vendió 3 videos distintos, aparecen los 3 — uno linkea a TikTok.
+// Marca verde el video que vendió producto del mismo grupo familia que una
+// muestra recibida (causal), gris si vende un producto sin relación.
+function renderVideosPanel(d) {
+  const videos = d.videos || [];
+  if (videos.length === 0) {
+    return ''; // sin videos no mostramos panel
+  }
+  const totalSales = videos.reduce((s, v) => s + v.sales, 0);
+  const matchedCount = videos.filter(v => v.is_matched).length;
+
+  return `
+  <div class="card" style="padding:0;margin-bottom:12px">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--lt2)">
+      <strong style="font-family:'Poppins',sans-serif;font-size:12px">🎬 Videos del período · ${videos.length}</strong>
+      <small style="color:var(--md);margin-left:6px">
+        ${matchedCount} matched (vendieron grupo de muestra) · ${videos.length - matchedCount} con otros productos
+      </small>
+    </div>
+    <div class="table-wrap" style="margin:0;max-height:360px;overflow-y:auto">
+      <table style="width:100%;font-size:12px">
+        <thead style="position:sticky;top:0;background:var(--wh);z-index:1">
+          <tr>
+            <th style="min-width:140px">Video</th>
+            <th>Producto principal</th>
+            <th class="text-right">Ventas</th>
+            <th class="text-right" title="Orgánico / Paid">Org/P</th>
+            <th class="text-right">Revenue</th>
+            <th class="text-right">Comisión</th>
+            <th>Match</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${videos.map(v => {
+            const matchedLabel = v.is_matched
+              ? '<span style="font-size:10px;padding:1px 6px;background:rgba(33,163,102,.12);color:#1a7a4f;border-radius:3px;font-weight:600" title="Vendió un producto del mismo grupo familia que alguna muestra recibida — atribuible">✓ matched</span>'
+              : '<span style="font-size:10px;padding:1px 6px;background:rgba(100,116,139,.1);color:#475569;border-radius:3px" title="Vendió un producto que no tiene muestra asociada — el afiliado lo vende por otra razón">otro prod.</span>';
+            const productLabel = v.product_count > 1
+              ? `${v.top_product} <small style="color:var(--md)">+${v.product_count - 1}</small>`
+              : v.top_product;
+            const period = v.first_date === v.last_date
+              ? ttsmDate(v.first_date)
+              : `${ttsmDate(v.first_date)}→${ttsmDate(v.last_date)}`;
+            return `
+            <tr>
+              <td>
+                <a href="https://www.tiktok.com/@${encodeURIComponent(d.handle)}/video/${v.video_id}" target="_blank"
+                   style="font-family:monospace;font-size:11px;color:var(--bl);text-decoration:none"
+                   title="Abrir en TikTok · ${period}">
+                  ${v.video_id.slice(-10)} ↗
+                </a>
+              </td>
+              <td><small title="${v.top_product}">${productLabel}</small></td>
+              <td class="text-right"><strong>${v.sales}</strong></td>
+              <td class="text-right" style="font-size:11px;color:var(--md)">${v.orders_org}/${v.orders_paid}</td>
+              <td class="text-right"><strong>${ttsmEur(v.revenue)}</strong></td>
+              <td class="text-right">${ttsmEur(v.commission)}</td>
+              <td>${matchedLabel}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="border-top:2px solid var(--lt2);background:rgba(0,0,0,.02)">
+            <td><strong>Total</strong></td>
+            <td></td>
+            <td class="text-right"><strong>${totalSales}</strong></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ─── Muestras recibidas (agrupadas por GRUPO, TODO el histórico) ───────
 function renderSamplesPanel(d) {
-  // Agrupamos por grupo: una fila por grupo con suma de unidades, costo y rango fechas
+  // Agrupamos por grupo. Una muestra está "in_period" si su sent_date cae
+  // dentro del rango filtrado — la marcamos con badge 🆕.
   const byGrupo = {};
   for (const s of d.samples) {
     const g = (s.grupo || s.sku || 'SIN GRUPO');
@@ -1093,6 +1197,7 @@ function renderSamplesPanel(d) {
       grupo: g, units: 0, samples: 0, cost: 0,
       first_date: s.sent_date, last_date: s.sent_date,
       orders: [],
+      has_in_period: false,
     };
     const r = byGrupo[g];
     r.samples += 1;
@@ -1100,16 +1205,22 @@ function renderSamplesPanel(d) {
     r.cost    += (s.cogs || 0) + (s.shipping_cost || 0);
     if (s.sent_date && s.sent_date < r.first_date) r.first_date = s.sent_date;
     if (s.sent_date && s.sent_date > r.last_date)  r.last_date  = s.sent_date;
+    if (s.in_period) r.has_in_period = true;
     r.orders.push(s.simla_order_num || s.simla_order_id);
   }
   const rows = Object.values(byGrupo).sort((a, b) => b.units - a.units);
   const totalUnits = rows.reduce((acc, r) => acc + r.units, 0);
   const totalCost  = rows.reduce((acc, r) => acc + r.cost,  0);
+  const inPeriodCount  = (d.samples || []).filter(s => s.in_period).length;
+  const outPeriodCount = (d.samples || []).length - inPeriodCount;
 
   return `
   <div class="card" style="padding:0">
     <div style="padding:10px 14px;border-bottom:1px solid var(--lt2)">
       <strong style="font-family:'Poppins',sans-serif;font-size:12px">📦 Muestras recibidas · ${d.samples.length} env. · ${rows.length} grupos</strong>
+      ${outPeriodCount > 0
+        ? `<small style="color:var(--md);margin-left:6px">${inPeriodCount} en el período · ${outPeriodCount} antes (atemporal)</small>`
+        : ''}
     </div>
     <div class="table-wrap" style="margin:0;max-height:360px">
       <table style="width:100%;font-size:12px">
@@ -1123,15 +1234,18 @@ function renderSamplesPanel(d) {
           </tr>
         </thead>
         <tbody>
-          ${rows.length === 0 ? '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--md)">Sin muestras en el período</td></tr>'
+          ${rows.length === 0 ? '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--md)">Sin muestras en el histórico</td></tr>'
             : rows.map(r => {
               const periodo = r.first_date === r.last_date
                 ? ttsmDate(r.first_date)
                 : `${ttsmDate(r.first_date)} → ${ttsmDate(r.last_date)}`;
               const ordersTitle = r.orders.slice(0, 8).join(', ') + (r.orders.length > 8 ? ` (+${r.orders.length - 8})` : '');
+              const newBadge = r.has_in_period
+                ? '<span style="font-size:9px;padding:1px 4px;margin-left:3px;background:#fef3c7;color:#92400e;border-radius:2px;font-weight:600" title="Hay envíos de este grupo dentro del rango filtrado">🆕</span>'
+                : '';
               return `
               <tr title="Pedidos: ${ordersTitle}">
-                <td>${renderSkuChip(r.grupo, 'received')}</td>
+                <td>${renderSkuChip(r.grupo, 'received')}${newBadge}</td>
                 <td class="text-right"><strong>${r.samples}</strong></td>
                 <td class="text-right"><strong>${r.units}</strong></td>
                 <td class="text-right">${ttsmEur(r.cost)}</td>
