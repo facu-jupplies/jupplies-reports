@@ -1216,54 +1216,51 @@ function _buildTopVideos(limit = 5) {
     return `<div style="font-size:11px;color:var(--md);padding:10px 0;text-align:center">Sin datos de videos</div>`;
   }
 
-  // Agrupar por (CREADOR × VIDEO). Cada fila ya es 1 producto-en-pedido (con contentId real).
-  // - totalSales del afiliado = nº pedidos (sólo isPrimary, para no doble-contar pedidos multiproducto)
-  // - videos[contentId].sales = nº filas-producto del video (cuántas veces ese video movió ventas)
-  // - videos[contentId].revenue = settlementAmount sumado (sólo lleva valor en primary del pedido)
-  const creators = {};
+  // Ranking PURO de videos: una fila por cada (creador × videoId), ordenadas
+  // por ventas. Si un creador tiene 3 videos virales, aparecen los 3 — esta
+  // tabla NO agrupa por afiliado (para eso está "Top Afiliados").
+  // Cada fila guarda: sales (filas-producto del video), revenue, productos
+  // que vendió, y un contador por creador para mostrar "video #2 de @name".
+  const videos = {};      // key "creator|videoId" → datos del video
+  const videoCountByCreator = {};  // creator → cuántos videos distintos tiene
   for (const af of _ttsAffiliateRows) {
     if (af.fullyRefunded) continue;
+    if (!af.contentId) continue;
     const name = af.creatorName || 'Desconocido';
-    if (!creators[name]) creators[name] = {
-      totalSales: 0,
-      videos: {},  // contentId → { sales, revenue, products: { name → count } }
-      productCount: new Set(),
-      contentType: af.contentType || '',
-    };
-    if (af.isPrimary) creators[name].totalSales++;
-    const prod = af.productName || af.sellerSku || '';
-    if (prod) creators[name].productCount.add(prod);
-    if (af.contentId) {
-      const v = creators[name].videos[af.contentId] || { sales: 0, revenue: 0, products: {} };
-      v.sales   += 1;
-      v.revenue += af.settlementAmount || 0;  // 0 en filas no-primary, no infla
-      if (prod) v.products[prod] = (v.products[prod] || 0) + 1;
-      creators[name].videos[af.contentId] = v;
+    const key  = name + '|' + af.contentId;
+    if (!videos[key]) {
+      videos[key] = {
+        creator:   name,
+        videoId:   af.contentId,
+        sales:     0,
+        revenue:   0,
+        products:  {},
+        contentType: af.contentType || '',
+      };
+      videoCountByCreator[name] = (videoCountByCreator[name] || 0) + 1;
     }
+    const v = videos[key];
+    v.sales   += 1;
+    v.revenue += af.settlementAmount || 0;
+    const prod = af.productName || af.sellerSku || '';
+    if (prod) v.products[prod] = (v.products[prod] || 0) + 1;
   }
 
-  const sorted = Object.entries(creators)
-    .map(([name, d]) => {
-      // Video top del afiliado: el de más ventas
-      const topVidEntry = Object.entries(d.videos).sort((a, b) => b[1].sales - a[1].sales)[0];
-      const topVideoId    = topVidEntry?.[0] || '';
-      const topVideoSales = topVidEntry?.[1].sales   || 0;
-      const topVideoRev   = topVidEntry?.[1].revenue || 0;
-      // Producto principal del video top: el que más aparece en sus pedidos
-      const prodEntry = topVidEntry
-        ? Object.entries(topVidEntry[1].products).sort((a, b) => b[1] - a[1])[0]
-        : null;
-      const topProductName = prodEntry?.[0] || '';
-      return {
-        name, topVideoId, topVideoSales, topVideoRev,
-        topProductName,
-        productCount: d.productCount.size,
-        totalSales: d.totalSales,
-        contentType: d.contentType,
-      };
-    })
-    .filter(c => c.topVideoId) // solo creadores con video identificado
-    .sort((a, b) => b.topVideoSales - a.topVideoSales);
+  // Sort por ventas DESC, luego por revenue DESC
+  const sorted = Object.values(videos).sort((a, b) =>
+    b.sales - a.sales || b.revenue - a.revenue
+  );
+
+  // Numerar el orden de cada video DENTRO de su creador (#1 más vendido, #2…)
+  // para mostrar "@jper9z · video #2" cuando aparece más de uno
+  const positionByCreator = {};
+  for (const v of sorted) {
+    positionByCreator[v.creator] = positionByCreator[v.creator] || [];
+    positionByCreator[v.creator].push(v);
+  }
+  for (const arr of Object.values(positionByCreator)) {
+    arr.forEach((v, i) => { v.position = i + 1; });
+  }
 
   const visible = sorted.slice(0, limit);
   const hasMore = sorted.length > limit;
@@ -1272,25 +1269,33 @@ function _buildTopVideos(limit = 5) {
     return `<div style="font-size:11px;color:var(--md);padding:10px 0;text-align:center">Sin videos detectados</div>`;
   }
 
-  const rows = visible.map((c, i) => {
-    const productLabel = c.productCount > 1
-      ? `${c.topProductName} <span style="color:var(--md);font-weight:400">· video top de ${c.productCount} productos</span>`
-      : (c.topProductName || c.contentType);
-    // Total del afiliado debajo, para que se vea cuánto pesa el video top sobre el total
-    const totalHint = c.totalSales > c.topVideoSales
-      ? `<div style="font-size:9px;color:var(--md)">de ${c.totalSales} totales</div>`
+  const rows = visible.map((v, i) => {
+    // Producto principal del video: el más vendido entre sus pedidos
+    const prodEntry = Object.entries(v.products).sort((a, b) => b[1] - a[1])[0];
+    const topProductName = prodEntry?.[0] || v.contentType;
+    const productCount   = Object.keys(v.products).length;
+
+    const productLabel = productCount > 1
+      ? `${topProductName} <span style="color:var(--md);font-weight:400">· +${productCount - 1} producto${productCount > 2 ? 's' : ''}</span>`
+      : topProductName;
+
+    // Mostrar "video #N de @creator" si el creador tiene >1 video en el ranking
+    const totalVideosCreator = videoCountByCreator[v.creator] || 1;
+    const videoHint = totalVideosCreator > 1
+      ? `<div style="font-size:9px;color:var(--md)">video #${v.position} de @${v.creator} (${totalVideosCreator})</div>`
       : '';
+
     return `
     <div style="display:flex;align-items:center;gap:6px;padding:4px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
       <div style="width:16px;height:16px;border-radius:50%;background:#fe2c55;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
       <div style="flex:1;min-width:0">
-        <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}/video/${c.topVideoId}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" class="tts-link">${c.name}</a>
-        <div style="font-size:8px;color:var(--md);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.topProductName}">${productLabel}</div>
+        <a href="https://www.tiktok.com/@${encodeURIComponent(v.creator)}/video/${v.videoId}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" class="tts-link">${v.creator}</a>
+        <div style="font-size:8px;color:var(--md);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${topProductName}">${productLabel}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
-        <div style="font-size:11px;font-weight:700">${c.topVideoSales} ven.</div>
-        <div style="font-size:9px;color:var(--md)">${fe(c.topVideoRev)}</div>
-        ${totalHint}
+        <div style="font-size:11px;font-weight:700">${v.sales} ven.</div>
+        <div style="font-size:9px;color:var(--md)">${fe(v.revenue)}</div>
+        ${videoHint}
       </div>
     </div>`;
   }).join('');
