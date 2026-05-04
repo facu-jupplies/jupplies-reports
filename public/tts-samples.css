@@ -1,0 +1,247 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   Estilos específicos para la página Muestras TTS (V1 denso minimal).
+   Todos los selectores van scoped bajo .ttsm-scope para no contaminar
+   el resto de la app.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* Anular padding/gap del .page global que rompe el diseño denso */
+#page-tts-samples.ttsm-scope,
+#page-tts-mappings.ttsm-scope {
+  padding: 0 !important;
+  gap: 0 !important;
+}
+
+/* IMPORTANTE: el display lo maneja .page/.page.active global (display:none / flex).
+   Acá solo aplicamos tokens y tipografía, no fijamos display para no forzar
+   la visibilidad fuera de la página activa. */
+
+.ttsm-scope {
+  --bg: #ffffff;
+  --bg-muted: #fafaf8;
+  --bg-subtle: #f6f6f4;
+  --bg-hover: #f2f2ef;
+  --border: #e7e5e0;
+  --border-strong: #d6d3cd;
+  --text: #0f1115;
+  --text-muted: #6b6a65;
+  --text-subtle: #9a9890;
+  --accent: #ef5a2c;
+  --accent-soft: #fff1ea;
+  --accent-ink: #c3410f;
+  --danger: #e5484d;
+  --danger-soft: #fdecee;
+  --success: #21a366;
+  --warn: #e7aa1b;
+  --radius: 6px;
+
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg-subtle);
+  font-feature-settings: 'tnum';
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+  /* display/flex-direction manejados por .page.active global — NO fijar aquí */
+}
+
+/* Cuando la página contenedora está activa, sí aplicamos el layout flex */
+.page.active.ttsm-scope {
+  flex-direction: column;
+}
+
+/* ─── Topbar ─── */
+.ttsm-scope .ttsm-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.ttsm-scope .ttsm-title { display: flex; align-items: baseline; gap: 10px; }
+.ttsm-scope .ttsm-title h1 { font-size: 18px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.ttsm-scope .ttsm-title .ttsm-sub { font-size: 12px; color: var(--text-muted); }
+.ttsm-scope .ttsm-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ttsm-scope .ttsm-flabel {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text-muted); margin-right: 6px;
+}
+
+/* ─── Inputs / botones ─── */
+.ttsm-scope .ttsm-input,
+.ttsm-scope .ttsm-select {
+  height: 30px; padding: 0 10px; font-size: 12.5px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg); color: var(--text);
+  font-family: inherit; outline: none;
+}
+.ttsm-scope .ttsm-input:focus,
+.ttsm-scope .ttsm-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(239,90,44,0.12); }
+.ttsm-scope .ttsm-input-sm { height: 24px; font-size: 12px; padding: 0 8px; }
+
+.ttsm-scope .ttsm-btn {
+  height: 30px; padding: 0 12px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-size: 12.5px; font-weight: 500; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: inherit;
+}
+.ttsm-scope .ttsm-btn:hover { background: var(--bg-hover); }
+.ttsm-scope .ttsm-btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+.ttsm-scope .ttsm-btn-accent:hover { background: var(--accent-ink); border-color: var(--accent-ink); }
+.ttsm-scope .ttsm-btn-ghost { border-color: transparent; background: transparent; }
+.ttsm-scope .ttsm-btn-ghost:hover { background: var(--bg-hover); }
+.ttsm-scope .ttsm-btn-sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
+.ttsm-scope .ttsm-btn-xs { height: 22px; padding: 0 7px; font-size: 11px; border-radius: 4px; }
+.ttsm-scope .ttsm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ttsm-scope .ttsm-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ─── KPI strip ─── */
+.ttsm-scope .ttsm-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.ttsm-scope .ttsm-kpi-cell {
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ttsm-scope .ttsm-kpi-cell:last-child { border-right: none; }
+.ttsm-scope .ttsm-kpi-label {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-muted);
+  display: flex; align-items: center; gap: 6px;
+}
+.ttsm-scope .ttsm-kpi-label svg { width: 14px; height: 14px; }
+.ttsm-scope .ttsm-kpi-value {
+  font-size: 22px; font-weight: 650; letter-spacing: -0.02em;
+  line-height: 1.15; font-feature-settings: 'tnum';
+}
+.ttsm-scope .ttsm-kpi-value.neg { color: var(--danger); }
+.ttsm-scope .ttsm-kpi-value.pos { color: var(--success); }
+.ttsm-scope .ttsm-kpi-sub { font-size: 11px; color: var(--text-muted); font-feature-settings: 'tnum'; }
+
+/* ─── Contenido ─── */
+.ttsm-scope .ttsm-content {
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 16px;
+  max-width: 1440px; width: 100%; margin: 0 auto;
+}
+.ttsm-scope .ttsm-grid-2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; }
+@media (max-width: 1100px) { .ttsm-scope .ttsm-grid-2 { grid-template-columns: 1fr; } }
+
+/* ─── Panels ─── */
+.ttsm-scope .ttsm-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.ttsm-scope .ttsm-section-title {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-muted);
+}
+.ttsm-scope .ttsm-section-title h2 {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text-muted);
+  margin: 0; display: flex; align-items: center; gap: 8px;
+}
+.ttsm-scope .ttsm-section-title .ttsm-count {
+  font-weight: 500; color: var(--text-subtle);
+  letter-spacing: 0; text-transform: none; font-size: 11.5px;
+}
+
+/* ─── Banner alert ─── */
+.ttsm-scope .ttsm-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; font-size: 12px;
+  background: #fff8f1; border-bottom: 1px solid #f3d9c1;
+  color: #8a4b1f;
+}
+.ttsm-scope .ttsm-banner strong { color: #6b3918; font-weight: 600; }
+.ttsm-scope .ttsm-banner .ttsm-dot {
+  width: 6px; height: 6px; background: var(--accent);
+  border-radius: 50%; flex-shrink: 0;
+}
+
+/* ─── Tablas ─── */
+.ttsm-scope .ttsm-tbl {
+  width: 100%; border-collapse: collapse;
+  font-size: 12.5px; background: var(--bg);
+}
+.ttsm-scope .ttsm-tbl thead th {
+  text-align: left; font-weight: 500; font-size: 10px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-muted);
+  position: sticky; top: 0; z-index: 1;
+  white-space: nowrap;
+}
+.ttsm-scope .ttsm-tbl tbody td {
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+  vertical-align: middle; font-feature-settings: 'tnum';
+}
+.ttsm-scope .ttsm-tbl tbody tr:hover { background: var(--bg-muted); }
+.ttsm-scope .ttsm-tbl tbody tr:last-child td { border-bottom: none; }
+.ttsm-scope .ttsm-tbl.dense tbody td { padding: 4px 12px; }
+
+.ttsm-scope .ttsm-num { text-align: right; font-variant-numeric: tabular-nums; }
+.ttsm-scope .ttsm-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+.ttsm-scope .ttsm-muted { color: var(--text-muted); }
+.ttsm-scope .ttsm-subtle { color: var(--text-subtle); }
+.ttsm-scope .ttsm-neg { color: var(--danger); }
+.ttsm-scope .ttsm-pos { color: var(--success); }
+
+/* ─── Chips ─── */
+.ttsm-scope .ttsm-chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 3px;
+  background: var(--bg-hover); color: var(--text);
+  font-size: 11px; font-weight: 500;
+  border: 1px solid var(--border);
+  line-height: 1.5; white-space: nowrap;
+}
+.ttsm-scope .ttsm-chip-orange { background: var(--accent-soft); color: var(--accent-ink); border-color: #fbd7c4; }
+.ttsm-scope .ttsm-chip-danger { background: var(--danger-soft); color: #c1292e; border-color: #f9c8cb; }
+.ttsm-scope .ttsm-chip-success { background: #e6f5ed; color: #1a7a4f; border-color: #bce3cf; }
+.ttsm-scope .ttsm-chip-warn { background: #fef5db; color: #8c6a00; border-color: #f3e2a8; }
+
+.ttsm-scope .ttsm-scroll { max-height: 420px; overflow: auto; }
+.ttsm-scope .ttsm-scroll-sm { max-height: 380px; overflow: auto; }
+
+/* ─── Bar cell (ranking productos) ─── */
+.ttsm-scope .ttsm-bar-cell { position: relative; height: 14px; background: transparent; }
+.ttsm-scope .ttsm-bar-cell .ttsm-fill {
+  position: absolute; left: 0; top: 3px; bottom: 3px;
+  background: linear-gradient(90deg, rgba(239,90,44,0.18), rgba(239,90,44,0.06));
+  border-left: 2px solid var(--accent);
+  border-radius: 2px;
+}
+
+/* ─── Empty & loading ─── */
+.ttsm-scope .ttsm-empty {
+  padding: 60px 20px; text-align: center; color: var(--text-muted);
+}
+.ttsm-scope .ttsm-empty .ttsm-empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.6; }
+.ttsm-scope .ttsm-loading {
+  padding: 40px; text-align: center; color: var(--text-muted); font-size: 13px;
+}
+
+/* ─── Scrollbar fino ─── */
+.ttsm-scope *::-webkit-scrollbar { width: 10px; height: 10px; }
+.ttsm-scope *::-webkit-scrollbar-track { background: transparent; }
+.ttsm-scope *::-webkit-scrollbar-thumb {
+  background: #d6d3cd; border-radius: 10px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+.ttsm-scope *::-webkit-scrollbar-thumb:hover { background: #b8b4ab; background-clip: padding-box; border: 2px solid transparent; }
