@@ -211,9 +211,48 @@ async function loadTTSAggregated() {
     const filteredGrupos = data.grupos.filter(g => dateSet.has(g.date));
     const filteredAffiliates = (data.affiliates || []).filter(a => dateSet.has(a.date));
 
-    // Reconstruir _ttsAffiliateRows desde datos guardados para que _buildTopAffiliates funcione
-    if (filteredAffiliates.length > 0) {
-      // Agregar por creador (puede haber múltiples días)
+    // Reconstruir _ttsAffiliateRows con la mejor granularidad disponible:
+    //  1) Si hay affiliate_videos (breakdown por video desde tts_affiliate_orders),
+    //     emitir N filas por (afiliado × video) — preserva discriminación por video.
+    //  2) Si no, fallback al agregado de tts_history_affiliates (top_video único
+    //     por afiliado, los cuadros Top Afiliados vs Top Producto×Afil van a coincidir).
+    const affiliateVideos = (data.affiliate_videos || []).filter(av => dateSet.has(av.order_date) || true);
+    // tts_affiliate_orders no expone date directamente en este shape: confiamos en el filtro from/to del backend.
+
+    if (affiliateVideos.length > 0) {
+      _ttsAffiliateRows = affiliateVideos.flatMap(av => {
+        const orders        = av.orders         || 0;     // total filas del video
+        const ordersPrimary = av.orders_primary || orders;// pedidos donde fue primary
+        const ordersPaid    = av.orders_paid    || 0;
+        const ordersOrg     = av.orders_org     || 0;
+        const revPerOrder   = ordersPrimary > 0 ? (av.revenue || 0) / ordersPrimary : 0;
+        const commPerOrder  = orders > 0 ? (av.commission || 0) / orders : 0;
+        const out = [];
+        for (let i = 0; i < orders; i++) {
+          const isPrimary = i < ordersPrimary;  // primeras N filas son primary
+          const isPaid    = i < ordersPaid;
+          const isOrg     = !isPaid && i < (ordersPaid + ordersOrg);
+          out.push({
+            creatorName: av.creator_name,
+            contentId:   av.video_id,
+            productName: av.product_name || av.grupo || '',
+            sellerSku:   av.grupo || '',
+            contentType: 'Vídeo',
+            isPrimary,
+            commPctStandard: isOrg  ? 16 : 0,
+            commPctAds:      isPaid ? 5  : 0,
+            commReal:        commPerOrder,
+            commRealAds:     0,
+            // Sólo primary lleva revenue (consistente con CSV: settlementAmount es por pedido)
+            settlementAmount: isPrimary ? revPerOrder : 0,
+            fullyRefunded: false,
+            orderStatus:   '',
+          });
+        }
+        return out;
+      });
+    } else if (filteredAffiliates.length > 0) {
+      // Fallback: agregado por afiliado (top_video único)
       const byCreator = {};
       for (const a of filteredAffiliates) {
         if (!byCreator[a.creator_name]) byCreator[a.creator_name] = { orders: 0, paid: 0, organic: 0, revenue: 0, commission: 0, topVideoId: '', topProduct: '' };
@@ -223,12 +262,12 @@ async function loadTTSAggregated() {
         if (!c.topVideoId && a.top_video_id) c.topVideoId = a.top_video_id;
         if (!c.topProduct && a.top_product) c.topProduct = a.top_product;
       }
-      // Convertir a formato compatible con _buildTopAffiliates
       _ttsAffiliateRows = Object.entries(byCreator).flatMap(([name, c]) => {
         const rows = [];
         for (let i = 0; i < c.orders; i++) {
           rows.push({
             creatorName: name, contentId: c.topVideoId, productName: c.topProduct, contentType: 'Vídeo',
+            isPrimary: true,  // legado: 1 fila = 1 pedido
             commPctStandard: c.organic > 0 && i < c.organic ? 16 : 0,
             commPctAds: c.paid > 0 && i >= c.organic && i < c.organic + c.paid ? 5 : 0,
             commReal: c.commission > 0 ? c.commission / c.orders : 0, commRealAds: 0,
@@ -444,32 +483,39 @@ function parseTTSAffiliateCSV(text) {
     });
   }
 
-  // Paso 2: agregar por orderId
-  // TikTok exporta UNA FILA POR PRODUCTO — un pedido con 2 productos aparece 2 veces.
-  // Sumamos comisiones y acumulamos SKUs; el settlementAmount es por pedido (tomar del primer row).
-  const byOrder = {};
+  // Paso 2: emitir UNA FILA POR PRODUCTO dentro del pedido (preservando contentId/productName
+  // por producto, que distintos videos pueden vender distintos productos del mismo pedido).
+  // El primer producto del pedido lleva `isPrimary=true` y conserva el settlementAmount completo;
+  // los productos adicionales tienen settlementAmount=0 para no duplicar el revenue del pedido.
+  // Todos los productos del pedido comparten la misma `skus[]` y `totalQuantity` para que
+  // los consumers que sólo miran isPrimary obtengan los totales del pedido.
+  const seenOrders = new Set();
+  const skusByOrder = {};
+  const totalQtyByOrder = {};
+  // Pre-pass: acumular skus y qty por orderId
   for (const row of rawRows) {
     const id = String(row.orderId).trim();
-    if (!byOrder[id]) {
-      byOrder[id] = {
-        ...row,
-        skus:          row.sellerSku ? [row.sellerSku] : [],
-        totalQuantity: row.quantity || 1,
-        // settlementAmount ya está en row (del primer producto = valor del pedido completo)
-      };
-    } else {
-      // Productos adicionales: sumar comisiones, acumular SKUs, NO sumar settlementAmount
-      byOrder[id].commReal    += row.commReal;
-      byOrder[id].commRealAds += row.commRealAds;
-      byOrder[id].totalQuantity += row.quantity || 0;
-      if (row.fullyRefunded) byOrder[id].fullyRefunded = true;
-      if (row.sellerSku && !byOrder[id].skus.includes(row.sellerSku)) {
-        byOrder[id].skus.push(row.sellerSku);
-      }
-    }
+    if (!skusByOrder[id]) skusByOrder[id] = [];
+    if (row.sellerSku && !skusByOrder[id].includes(row.sellerSku)) skusByOrder[id].push(row.sellerSku);
+    totalQtyByOrder[id] = (totalQtyByOrder[id] || 0) + (row.quantity || 0);
   }
-
-  return Object.values(byOrder);
+  // Emit pass: 1 fila por producto, isPrimary=true en el primer producto
+  const out = [];
+  for (const row of rawRows) {
+    const id = String(row.orderId).trim();
+    const isPrimary = !seenOrders.has(id);
+    seenOrders.add(id);
+    out.push({
+      ...row,
+      isPrimary,
+      // Mantener compat con consumers que esperan estos campos por pedido
+      skus:          skusByOrder[id],
+      totalQuantity: totalQtyByOrder[id],
+      // settlementAmount sólo en la fila primaria — evita duplicar revenue por pedido
+      settlementAmount: isPrimary ? row.settlementAmount : 0,
+    });
+  }
+  return out;
 }
 
 function onTTSAffiliateFile(input) {
@@ -612,7 +658,7 @@ function renderTTSUploadZone() {
     ondragleave="document.getElementById('tts-dropzone').style.borderColor='';document.getElementById('tts-dropzone').style.background=''"
     ondrop="event.preventDefault();document.getElementById('tts-dropzone').style.borderColor='';document.getElementById('tts-dropzone').style.background='';handleTTSFileDrop(event)"
     onclick="if(event.target.tagName!=='A'&&event.target.tagName!=='BUTTON')document.getElementById('tts-multi-input').click()">
-    <input type="file" id="tts-multi-input" accept=".csv,.xlsx,.xls" multiple style="display:none"
+    <input type="file" id="tts-multi-input" accept=".csv,.xlsx,.xls,.zip" multiple style="display:none"
       onchange="handleTTSFileInput(this)">
     <div id="tts-zone-content"></div>
   </div>
@@ -674,10 +720,10 @@ function _ttsZoneHTML() {
 
   // idle — compact version
   return `
-  <div style="font-size:13px;font-weight:700;margin-bottom:6px;color:var(--fg)">📂 Importar día nuevo</div>
-  <div style="font-size:11px;color:var(--md);margin-bottom:8px">CSV Afiliados + XLSX GMV Max</div>
+  <div style="font-size:13px;font-weight:700;margin-bottom:6px;color:var(--fg)">📂 Importar día o mes</div>
+  <div style="font-size:11px;color:var(--md);margin-bottom:8px">CSV + XLSX (1 día) · o ZIP con carpetas por día</div>
   <div style="display:inline-flex;gap:6px;align-items:center;padding:6px 14px;background:rgba(254,44,85,.12);border-radius:16px;color:#fe2c55;font-size:11px;font-weight:700;pointer-events:none">
-    📁 Seleccionar archivos
+    📁 Seleccionar archivos / ZIP
   </div>
   <div style="margin-top:8px;font-size:10px;color:var(--md)">
     <a href="#" onclick="event.stopPropagation();toggleTTSManual(true)" style="color:var(--md);text-decoration:underline dotted;text-underline-offset:2px">Fecha manual →</a>
@@ -732,6 +778,13 @@ function handleTTSFileInput(input) {
 }
 
 async function handleTTSFiles(fileList) {
+  // Si hay un ZIP, ir al flujo masivo
+  for (const file of fileList) {
+    if (file.name.toLowerCase().endsWith('.zip')) {
+      return handleTTSZipUpload(file);
+    }
+  }
+
   _ttsUploadState = 'processing';
   _refreshTTSZone();
 
@@ -1086,7 +1139,9 @@ function _buildTopAffiliates(limit = 10) {
     return `<div style="font-size:12px;color:var(--md);padding:10px 0;text-align:center">Sin datos de afiliados</div>`;
   }
 
-  // Agrupar por creador
+  // Agrupar por creador. Filas con isPrimary=true son las "primarias" del pedido
+  // (1 por orderId), las no-primary son productos adicionales del mismo pedido —
+  // se cuentan para tracking por video pero NO suman a `orders` ni a `paid/organic`.
   const creators = {};
   for (const af of _ttsAffiliateRows) {
     const name = af.creatorName || 'Desconocido';
@@ -1095,19 +1150,22 @@ function _buildTopAffiliates(limit = 10) {
     if (refunded) continue;
 
     if (!creators[name]) creators[name] = { orders: 0, revenue: 0, commission: 0, paid: 0, organic: 0, noApto: 0, contentType: af.contentType || '', videos: {} };
-    creators[name].orders++;
-    creators[name].revenue += af.settlementAmount || 0;
-    // Track ventas por video
+
+    // Track ventas por video — todas las filas (primary + secundarios)
     if (af.contentId) {
       if (!creators[name].videos[af.contentId]) creators[name].videos[af.contentId] = 0;
       creators[name].videos[af.contentId]++;
     }
 
-    if (noApto) { creators[name].noApto++; continue; }
-
+    // Comisión se acumula POR FILA (cada producto tiene su comisión independiente)
     const comm = (parseFloat(af.commReal) || 0) + (parseFloat(af.commRealAds) || 0);
-    creators[name].commission += comm;
+    if (!noApto) creators[name].commission += comm;
 
+    // Lo demás (orders, revenue, paid/organic) es POR PEDIDO — sólo en primary
+    if (!af.isPrimary) continue;
+    creators[name].orders++;
+    creators[name].revenue += af.settlementAmount || 0;
+    if (noApto) { creators[name].noApto++; continue; }
     if (parseFloat(af.commPctAds) > 0) creators[name].paid++;
     else if (parseFloat(af.commPctStandard) > 0) creators[name].organic++;
   }
@@ -1158,26 +1216,54 @@ function _buildTopVideos(limit = 5) {
     return `<div style="font-size:11px;color:var(--md);padding:10px 0;text-align:center">Sin datos de videos</div>`;
   }
 
-  // Agrupar por contentId
-  const videos = {};
+  // Agrupar por (CREADOR × VIDEO). Cada fila ya es 1 producto-en-pedido (con contentId real).
+  // - totalSales del afiliado = nº pedidos (sólo isPrimary, para no doble-contar pedidos multiproducto)
+  // - videos[contentId].sales = nº filas-producto del video (cuántas veces ese video movió ventas)
+  // - videos[contentId].revenue = settlementAmount sumado (sólo lleva valor en primary del pedido)
+  const creators = {};
   for (const af of _ttsAffiliateRows) {
     if (af.fullyRefunded) continue;
-    const vid = af.contentId;
-    if (!vid) continue;
-
-    if (!videos[vid]) videos[vid] = { creator: af.creatorName || '?', sales: 0, revenue: 0, contentType: af.contentType || '', products: {} };
-    videos[vid].sales++;
-    videos[vid].revenue += af.settlementAmount || 0;
+    const name = af.creatorName || 'Desconocido';
+    if (!creators[name]) creators[name] = {
+      totalSales: 0,
+      videos: {},  // contentId → { sales, revenue, products: { name → count } }
+      productCount: new Set(),
+      contentType: af.contentType || '',
+    };
+    if (af.isPrimary) creators[name].totalSales++;
     const prod = af.productName || af.sellerSku || '';
-    if (prod) videos[vid].products[prod] = (videos[vid].products[prod] || 0) + 1;
+    if (prod) creators[name].productCount.add(prod);
+    if (af.contentId) {
+      const v = creators[name].videos[af.contentId] || { sales: 0, revenue: 0, products: {} };
+      v.sales   += 1;
+      v.revenue += af.settlementAmount || 0;  // 0 en filas no-primary, no infla
+      if (prod) v.products[prod] = (v.products[prod] || 0) + 1;
+      creators[name].videos[af.contentId] = v;
+    }
   }
 
-  const sorted = Object.entries(videos)
-    .map(([id, d]) => {
-      const topProduct = Object.entries(d.products).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-      return { id, ...d, topProduct };
+  const sorted = Object.entries(creators)
+    .map(([name, d]) => {
+      // Video top del afiliado: el de más ventas
+      const topVidEntry = Object.entries(d.videos).sort((a, b) => b[1].sales - a[1].sales)[0];
+      const topVideoId    = topVidEntry?.[0] || '';
+      const topVideoSales = topVidEntry?.[1].sales   || 0;
+      const topVideoRev   = topVidEntry?.[1].revenue || 0;
+      // Producto principal del video top: el que más aparece en sus pedidos
+      const prodEntry = topVidEntry
+        ? Object.entries(topVidEntry[1].products).sort((a, b) => b[1] - a[1])[0]
+        : null;
+      const topProductName = prodEntry?.[0] || '';
+      return {
+        name, topVideoId, topVideoSales, topVideoRev,
+        topProductName,
+        productCount: d.productCount.size,
+        totalSales: d.totalSales,
+        contentType: d.contentType,
+      };
     })
-    .sort((a, b) => b.sales - a.sales);
+    .filter(c => c.topVideoId) // solo creadores con video identificado
+    .sort((a, b) => b.topVideoSales - a.topVideoSales);
 
   const visible = sorted.slice(0, limit);
   const hasMore = sorted.length > limit;
@@ -1186,18 +1272,28 @@ function _buildTopVideos(limit = 5) {
     return `<div style="font-size:11px;color:var(--md);padding:10px 0;text-align:center">Sin videos detectados</div>`;
   }
 
-  const rows = visible.map((v, i) => `
+  const rows = visible.map((c, i) => {
+    const productLabel = c.productCount > 1
+      ? `${c.topProductName} <span style="color:var(--md);font-weight:400">· video top de ${c.productCount} productos</span>`
+      : (c.topProductName || c.contentType);
+    // Total del afiliado debajo, para que se vea cuánto pesa el video top sobre el total
+    const totalHint = c.totalSales > c.topVideoSales
+      ? `<div style="font-size:9px;color:var(--md)">de ${c.totalSales} totales</div>`
+      : '';
+    return `
     <div style="display:flex;align-items:center;gap:6px;padding:4px 0;${i > 0 ? 'border-top:1px solid var(--lt2);' : ''}">
       <div style="width:16px;height:16px;border-radius:50%;background:#fe2c55;color:#fff;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i + 1}</div>
       <div style="flex:1;min-width:0">
-        <a href="https://www.tiktok.com/@${encodeURIComponent(v.creator)}/video/${v.id}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" class="tts-link">${v.creator}</a>
-        <div style="font-size:8px;color:var(--md);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${v.topProduct}">${v.topProduct || v.contentType}</div>
+        <a href="https://www.tiktok.com/@${encodeURIComponent(c.name)}/video/${c.topVideoId}" target="_blank" style="font-size:10px;font-weight:600;color:var(--dk);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block" class="tts-link">${c.name}</a>
+        <div style="font-size:8px;color:var(--md);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.topProductName}">${productLabel}</div>
       </div>
       <div style="text-align:right;flex-shrink:0">
-        <div style="font-size:11px;font-weight:700">${v.sales} ven.</div>
-        <div style="font-size:9px;color:var(--md)">${fe(v.revenue)}</div>
+        <div style="font-size:11px;font-weight:700">${c.topVideoSales} ven.</div>
+        <div style="font-size:9px;color:var(--md)">${fe(c.topVideoRev)}</div>
+        ${totalHint}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   const expandBtn = hasMore ? `
     <div style="text-align:center;margin-top:4px">
@@ -1338,7 +1434,7 @@ function renderTTSReport(date, result) {
 
       <!-- Columna 2: Top Videos -->
       <div class="card" style="padding:12px">
-        <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Videos</div>
+        <div class="card-title" style="font-size:11px;margin-bottom:6px">Top Producto × Afiliado</div>
         <div style="max-height:300px;overflow-y:auto" id="tts-top-videos">${_buildTopVideos(50)}</div>
       </div>
 
@@ -1355,11 +1451,11 @@ function renderTTSReport(date, result) {
         <div style="font-size:9px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--md);margin-bottom:8px">Estructura del ingreso</div>
         ${ttsPLStackedBar(summary)}
 
-        ${_ttsAffiliateRows.length === 0 ? `
+        ${_ttsAffiliateRows.length === 0 && (summary.commission_cost || 0) === 0 ? `
           <div style="margin-top:12px;padding:7px 9px;background:rgba(245,158,11,.08);border:1.5px solid rgba(245,158,11,.3);border-radius:6px;font-size:10px;color:var(--md)">
             ⚠️ Sin CSV de afiliados — todos clasificados como orgánicos.
           </div>` : ''}
-        ${Object.keys(_ttsGMVCampaigns).length === 0 ? `
+        ${Object.keys(_ttsGMVCampaigns).length === 0 && (summary.gmv_max_spend || 0) === 0 ? `
           <div style="margin-top:5px;padding:7px 9px;background:rgba(59,130,246,.08);border:1.5px solid rgba(59,130,246,.3);border-radius:6px;font-size:10px;color:var(--md)">
             ℹ️ Sin XLSX GMV Max — gasto ads = €0.
           </div>` : ''}
@@ -1495,21 +1591,28 @@ async function exportTTSJpg(date) {
 
 // ── Guardar en historial ──────────────────────────────────────────────────────
 
-function _buildAffiliateDataForSave() {
-  if (_ttsAffiliateRows.length === 0) return [];
+function _buildAffiliateDataForSave(rows) {
+  const source = rows || _ttsAffiliateRows;
+  if (!source || source.length === 0) return [];
   const creators = {};
-  for (const af of _ttsAffiliateRows) {
+  for (const af of source) {
     if (af.fullyRefunded) continue;
     const name = af.creatorName || 'Desconocido';
     if (!creators[name]) creators[name] = { orders: 0, paid: 0, organic: 0, revenue: 0, commission: 0, videos: {}, products: {} };
     const noApto = (af.orderStatus || '').toLowerCase().includes('no apt');
-    creators[name].orders++;
-    creators[name].revenue += af.settlementAmount || 0;
+    // Contadores por pedido — sólo en filas isPrimary (1 por orderId)
+    if (af.isPrimary) {
+      creators[name].orders++;
+      creators[name].revenue += af.settlementAmount || 0;  // primary lleva el revenue del pedido
+      if (!noApto) {
+        if (parseFloat(af.commPctAds) > 0) creators[name].paid++;
+        else if (parseFloat(af.commPctStandard) > 0) creators[name].organic++;
+      }
+    }
+    // Comisión, videos y productos: por FILA (cada producto tiene su contentId/comisión)
     if (!noApto) {
       const comm = (parseFloat(af.commReal) || 0) + (parseFloat(af.commRealAds) || 0);
       creators[name].commission += comm;
-      if (parseFloat(af.commPctAds) > 0) creators[name].paid++;
-      else if (parseFloat(af.commPctStandard) > 0) creators[name].organic++;
     }
     if (af.contentId) creators[name].videos[af.contentId] = (creators[name].videos[af.contentId] || 0) + 1;
     if (af.productName) creators[name].products[af.productName] = (creators[name].products[af.productName] || 0) + 1;
@@ -1546,4 +1649,328 @@ async function saveTTSHistory() {
   } catch (err) {
     alert('Error al guardar: ' + err.message);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBIDA MASIVA POR ZIP
+// El ZIP contiene una carpeta por día, y dentro de cada una el CSV de
+// afiliados + el XLSX de campañas GMV Max. Procesamos todos secuencialmente:
+// /api/tts/report → /api/tts/history/save por cada día.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _ttsBulkDays = [];
+
+function _detectDateFromString(s) {
+  if (!s) return null;
+  // ISO YYYY-MM-DD (con separadores opcionales)
+  let m = s.match(/(20\d{2})[-_/.]?(\d{2})[-_/.]?(\d{2})/);
+  if (m) {
+    const y = m[1], mo = m[2], d = m[3];
+    if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `${y}-${mo}-${d}`;
+  }
+  // DD-MM-YYYY
+  m = s.match(/(\d{2})[-_/.](\d{2})[-_/.](20\d{2})/);
+  if (m) {
+    const d = m[1], mo = m[2], y = m[3];
+    if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `${y}-${mo}-${d}`;
+  }
+  return null;
+}
+
+// Detecta fecha mirando primero el nombre completo de la carpeta y luego sus
+// componentes padre (útil para zips tipo "abril-2026/15/").
+function _detectDateFromFolderPath(folderPath) {
+  const direct = _detectDateFromString(folderPath);
+  if (direct) return direct;
+
+  const parts = folderPath.split('/').filter(Boolean);
+  const last = parts[parts.length - 1] || '';
+
+  // Caso: la carpeta es solo un día (1..31) y el padre tiene mes/año
+  const dayOnly = last.match(/^(\d{1,2})$/);
+  if (dayOnly && parts.length >= 2) {
+    const day = String(+dayOnly[1]).padStart(2, '0');
+    const parent = parts.slice(0, -1).join(' ');
+
+    // Buscar mes (numérico o por nombre) + año en el padre
+    const months = {
+      enero:'01', ene:'01', febrero:'02', feb:'02', marzo:'03', mar:'03',
+      abril:'04', abr:'04', mayo:'05', may:'05', junio:'06', jun:'06',
+      julio:'07', jul:'07', agosto:'08', ago:'08',
+      septiembre:'09', setiembre:'09', sep:'09', sept:'09',
+      octubre:'10', oct:'10', noviembre:'11', nov:'11', diciembre:'12', dic:'12',
+    };
+    const yearM = parent.match(/(20\d{2})/);
+    const year = yearM ? yearM[1] : new Date().getFullYear();
+
+    const lower = parent.toLowerCase();
+    let monthNum = null;
+    for (const [name, num] of Object.entries(months)) {
+      if (new RegExp('\\b' + name + '\\b').test(lower)) { monthNum = num; break; }
+    }
+    if (!monthNum) {
+      const numM = parent.match(/(?:^|[^0-9])(0?[1-9]|1[0-2])(?:[^0-9]|$)/);
+      if (numM) monthNum = String(+numM[1]).padStart(2, '0');
+    }
+    if (monthNum) return `${year}-${monthNum}-${day}`;
+  }
+  return null;
+}
+
+async function handleTTSZipUpload(zipFile) {
+  if (typeof JSZip === 'undefined') {
+    alert('La librería JSZip no cargó. Recargá la página.');
+    return;
+  }
+
+  _ttsUploadState = 'processing';
+  _refreshTTSZone();
+
+  const el = document.getElementById('tts-content');
+  el.innerHTML = `<div class="loading">📦 Leyendo ZIP "${zipFile.name}"…</div>`;
+
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(zipFile);
+  } catch (err) {
+    el.innerHTML = `<div class="empty-state">
+      <div class="icon">⚠️</div>
+      <div class="msg">No pude leer el ZIP</div>
+      <div class="hint">${err.message}</div>
+    </div>`;
+    _ttsUploadState = 'idle';
+    _refreshTTSZone();
+    return;
+  }
+
+  // Agrupar archivos por carpeta padre. Ignorar __MACOSX y archivos hidden.
+  const folders = {};
+  zip.forEach((path, entry) => {
+    if (entry.dir) return;
+    if (path.includes('__MACOSX/')) return;
+
+    const parts = path.split('/').filter(Boolean);
+    const filename = parts[parts.length - 1];
+    if (!filename || filename.startsWith('.')) return;
+
+    const folderPath = parts.slice(0, -1).join('/') || '_root';
+    if (!folders[folderPath]) folders[folderPath] = { csv: null, csvName: '', xlsx: null, xlsxName: '' };
+
+    const lower = filename.toLowerCase();
+    if (lower.endsWith('.csv') && !folders[folderPath].csv) {
+      folders[folderPath].csv = entry;
+      folders[folderPath].csvName = filename;
+    } else if ((lower.endsWith('.xlsx') || lower.endsWith('.xls')) && !folders[folderPath].xlsx) {
+      folders[folderPath].xlsx = entry;
+      folders[folderPath].xlsxName = filename;
+    }
+  });
+
+  const days = [];
+  for (const [folderPath, files] of Object.entries(folders)) {
+    if (!files.csv && !files.xlsx) continue;
+
+    let date = _detectDateFromFolderPath(folderPath);
+    let affiliateRows = [];
+    let gmvCampaigns = {};
+    let parseError = null;
+
+    try {
+      if (files.csv) {
+        const text = await files.csv.async('string');
+        affiliateRows = parseTTSAffiliateCSV(text);
+        if (!date) date = _extractDateFromAffiliateCsv(text);
+      }
+    } catch (e) {
+      parseError = 'CSV: ' + e.message;
+      console.error('[TTS bulk]', folderPath, e);
+    }
+
+    try {
+      if (files.xlsx) {
+        const buf = await files.xlsx.async('arraybuffer');
+        gmvCampaigns = parseTTSGMVXLSX(buf);
+        if (!date) date = _extractDateFromGMVFilename(files.xlsxName);
+      }
+    } catch (e) {
+      parseError = (parseError ? parseError + ' · ' : '') + 'XLSX: ' + e.message;
+      console.error('[TTS bulk]', folderPath, e);
+    }
+
+    days.push({
+      folderPath,
+      date,
+      affiliateRows,
+      gmvCampaigns,
+      csvName: files.csvName,
+      xlsxName: files.xlsxName,
+      included: !!date,
+      status: parseError ? 'error' : 'pending',
+      error: parseError,
+    });
+  }
+
+  if (!days.length) {
+    el.innerHTML = `<div class="empty-state">
+      <div class="icon">📭</div>
+      <div class="msg">No encontré carpetas con CSV/XLSX dentro del ZIP</div>
+      <div class="hint">Revisá la estructura: una carpeta por día con CSV de afiliados + XLSX de GMV Max</div>
+    </div>`;
+    _ttsUploadState = 'idle';
+    _refreshTTSZone();
+    return;
+  }
+
+  days.sort((a, b) => (a.date || 'zzzz').localeCompare(b.date || 'zzzz'));
+  _ttsBulkDays = days;
+  _ttsUploadState = 'idle';
+  _refreshTTSZone();
+  _renderTTSBulkPreview();
+}
+
+function _renderTTSBulkPreview() {
+  const el = document.getElementById('tts-content');
+  const total = _ttsBulkDays.length;
+  const valid = _ttsBulkDays.filter(d => d.date).length;
+  const both  = _ttsBulkDays.filter(d => d.csvName && d.xlsxName).length;
+
+  el.innerHTML = `
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:var(--fg)">📦 Carga masiva</div>
+        <div style="font-size:12px;color:var(--md);margin-top:2px">
+          ${total} carpetas · ${valid} con fecha detectada · ${both} con CSV+XLSX completos
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="resetTTSBulk()">↺ Cancelar</button>
+        <button class="btn btn-primary" id="tts-bulk-process-btn" onclick="processTTSBulk()">⚡ Procesar y guardar todo</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="tts-bulk-table" style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="text-align:left;border-bottom:2px solid var(--border,#e2e8f0);background:var(--lt2,#f8fafc)">
+            <th style="padding:8px 10px;width:40px"></th>
+            <th style="padding:8px 10px">Carpeta</th>
+            <th style="padding:8px 10px;width:160px">Fecha</th>
+            <th style="padding:8px 10px;width:130px">CSV afiliados</th>
+            <th style="padding:8px 10px;width:140px">XLSX campañas</th>
+            <th style="padding:8px 10px;width:140px">Estado</th>
+          </tr>
+        </thead>
+        <tbody id="tts-bulk-tbody"></tbody>
+      </table>
+    </div>
+    <div id="tts-bulk-summary" style="margin-top:12px;font-size:12px;color:var(--md)"></div>
+  </div>`;
+
+  _renderTTSBulkRows();
+}
+
+function _renderTTSBulkRows() {
+  const tbody = document.getElementById('tts-bulk-tbody');
+  if (!tbody) return;
+
+  const statusCell = (d) => {
+    if (d.status === 'processing') return '<span style="color:#fe2c55;font-weight:600">⏳ Procesando…</span>';
+    if (d.status === 'done')       return '<span style="color:#16a34a;font-weight:600">✓ Guardado</span>';
+    if (d.status === 'error')      return `<span style="color:#c0392b;font-weight:600" title="${(d.error||'').replace(/"/g,'&quot;')}">✗ Error</span>`;
+    if (d.status === 'skipped')    return '<span style="color:var(--md)">— Omitido</span>';
+    if (!d.date)                   return '<span style="color:#b87800">⚠ Sin fecha</span>';
+    return '<span style="color:var(--md)">⏸ Pendiente</span>';
+  };
+
+  tbody.innerHTML = _ttsBulkDays.map((d, i) => {
+    const checked = d.included ? 'checked' : '';
+    const dateInput = `<input type="date" value="${d.date || ''}" onchange="_setTTSBulkDate(${i}, this.value)" style="width:140px;padding:4px 8px;font-size:12px;border:1px solid var(--border,#e2e8f0);border-radius:6px">`;
+    const csvCell = d.csvName
+      ? `<span style="color:#16a34a">✓</span> <span style="font-size:11px;color:var(--md)">${d.affiliateRows.length} filas</span>`
+      : '<span style="color:var(--md)">—</span>';
+    const xlsxCell = d.xlsxName
+      ? `<span style="color:#16a34a">✓</span> <span style="font-size:11px;color:var(--md)">${Object.keys(d.gmvCampaigns).length} camp.</span>`
+      : '<span style="color:var(--md)">—</span>';
+
+    return `
+    <tr style="border-bottom:1px solid var(--border,#f1f5f9)">
+      <td style="padding:8px 10px"><input type="checkbox" ${checked} onchange="_toggleTTSBulk(${i}, this.checked)" style="width:16px;height:16px;cursor:pointer"></td>
+      <td style="padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--md)">${d.folderPath === '_root' ? '(raíz)' : d.folderPath}</td>
+      <td style="padding:8px 10px">${dateInput}</td>
+      <td style="padding:8px 10px">${csvCell}</td>
+      <td style="padding:8px 10px">${xlsxCell}</td>
+      <td style="padding:8px 10px">${statusCell(d)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _toggleTTSBulk(i, checked) {
+  if (_ttsBulkDays[i]) _ttsBulkDays[i].included = checked;
+}
+
+function _setTTSBulkDate(i, value) {
+  if (_ttsBulkDays[i]) {
+    _ttsBulkDays[i].date = value || null;
+    if (_ttsBulkDays[i].status === 'pending' || _ttsBulkDays[i].status === 'error') {
+      _ttsBulkDays[i].included = !!value;
+      _renderTTSBulkRows();
+    }
+  }
+}
+
+function resetTTSBulk() {
+  _ttsBulkDays = [];
+  resetTTSUpload();
+}
+
+async function processTTSBulk() {
+  const days = _ttsBulkDays.filter(d => d.included && d.date);
+  if (!days.length) return alert('No hay días válidos para procesar (revisá fechas y checkboxes).');
+
+  const btn = document.getElementById('tts-bulk-process-btn');
+  const summary = document.getElementById('tts-bulk-summary');
+  btn.disabled = true;
+  btn.textContent = `⏳ Procesando 0/${days.length}…`;
+
+  let okCount = 0, errCount = 0;
+  for (let n = 0; n < days.length; n++) {
+    const d = days[n];
+    d.status = 'processing';
+    d.error = null;
+    _renderTTSBulkRows();
+    btn.textContent = `⏳ Procesando ${n + 1}/${days.length}…`;
+
+    try {
+      const result = await API.ttsReport({
+        date: d.date,
+        affiliateRows: d.affiliateRows,
+        gmvCampaigns: d.gmvCampaigns,
+      });
+
+      const affiliatesToSave = _buildAffiliateDataForSave(d.affiliateRows);
+
+      await API.ttsSaveHistory({
+        date: d.date,
+        summary: result.summary,
+        grupos: result.pl,
+        affiliates: affiliatesToSave,
+      });
+
+      d.status = 'done';
+      okCount++;
+    } catch (err) {
+      d.status = 'error';
+      d.error = err.message;
+      errCount++;
+      console.error('[TTS bulk]', d.date, err);
+    }
+    _renderTTSBulkRows();
+    if (summary) summary.innerHTML = `Procesados ${n + 1}/${days.length} · <span style="color:#16a34a;font-weight:600">${okCount} OK</span> · <span style="color:#c0392b;font-weight:600">${errCount} errores</span>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = `✓ Listo — ${okCount} guardados${errCount ? ` · ${errCount} errores` : ''}`;
+
+  // Refrescar el strip para que aparezcan los días recién guardados
+  try { await loadTTSDaysStrip(); } catch (_) {}
 }

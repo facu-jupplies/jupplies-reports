@@ -12,6 +12,90 @@ const {
   buildSummary,
 } = require('../services/ttsService');
 const { fetchSimlaTTSOrders } = require('../services/simlaService');
+const { parseTTSAffiliateCSV } = require('../services/ttsCsvParser');
+
+// ─── Helper: persistir filas del CSV de afiliados en tts_affiliate_orders ───
+// Permite matchear con muestras gratis (pestaña "Muestras TTS") a posteriori.
+// Se llama con skuMap ya resuelto. Idempotente por UNIQUE(csv_order_id, csv_sku_id).
+function persistAffiliateOrders(db, date, affiliateRows, skuMap) {
+  if (!Array.isArray(affiliateRows) || affiliateRows.length === 0) return 0;
+
+  function resolveGrupo(rawSku) {
+    if (!rawSku) return '';
+    const sku = rawSku.toUpperCase().trim();
+    const sd = skuMap[sku]
+      || skuMap[sku.replace(/-[A-Z0-9]+$/, '-')]
+      || skuMap[sku.replace(/-[A-Z0-9]+$/, '')];
+    return (sd?.grupo || sku).toUpperCase();
+  }
+
+  const upsert = db.prepare(`
+    INSERT INTO tts_affiliate_orders (
+      order_date, csv_order_id, tiktok_username,
+      product_name, product_id, csv_sku_id, sku, grupo,
+      price, revenue, commission, comm_type,
+      video_id, content_type, order_status, fully_refunded, is_primary
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(csv_order_id, csv_sku_id) DO UPDATE SET
+      order_date     = excluded.order_date,
+      tiktok_username= excluded.tiktok_username,
+      product_name   = excluded.product_name,
+      product_id     = excluded.product_id,
+      sku            = excluded.sku,
+      grupo          = excluded.grupo,
+      price          = excluded.price,
+      revenue        = excluded.revenue,
+      commission     = excluded.commission,
+      comm_type      = excluded.comm_type,
+      video_id       = excluded.video_id,
+      content_type   = excluded.content_type,
+      order_status   = excluded.order_status,
+      fully_refunded = excluded.fully_refunded,
+      is_primary     = excluded.is_primary
+  `);
+
+  let count = 0;
+  const tx = db.transaction(() => {
+    for (const af of affiliateRows) {
+      const orderId = String(af.orderId || '').trim();
+      if (!orderId) continue;
+
+      // Una fila por (orderId × producto). sellerSku identifica el producto dentro del pedido.
+      // Para filas no-primary el frontend ya pone settlementAmount=0 (revenue del pedido va sólo
+      // en la primera fila para no doble-contarlo).
+      const sku = (af.sellerSku || af.skus?.[0] || '').toUpperCase().trim();
+      const grupo = resolveGrupo(sku);
+
+      const commPctAds      = parseFloat(af.commPctAds) || 0;
+      const commPctStandard = parseFloat(af.commPctStandard) || 0;
+      const commReal        = parseFloat(af.commReal) || 0;
+      const commRealAds     = parseFloat(af.commRealAds) || 0;
+      const commission      = commReal + commRealAds;
+      const revenue         = parseFloat(af.settlementAmount) || 0;
+
+      let commType = 'none';
+      if (commPctAds > 0) commType = 'paid';
+      else if (commPctStandard > 0) commType = 'org';
+
+      const refunded = af.fullyRefunded === true || String(af.fullyRefunded || '').toLowerCase() === 'true';
+      const isPrimary = af.isPrimary === false ? 0 : 1;
+
+      const csvSkuId = sku || '__primary__';
+
+      upsert.run(
+        date, orderId, (af.creatorName || '').toLowerCase().trim(),
+        af.productName || null, null, csvSkuId, sku || null, grupo || null,
+        round(revenue), round(revenue), round(commission), commType,
+        af.contentId || null, af.contentType || null,
+        af.orderStatus || null, refunded ? 1 : 0, isPrimary,
+      );
+      count++;
+    }
+  });
+  tx();
+
+  return count;
+}
 
 // ─── POST /api/tts/report ─────────────────────────────────────────────────────
 // Carga y calcula el P&L de TikTok Shop para una fecha.
@@ -147,8 +231,10 @@ router.post('/report', async (req, res) => {
       }
     }
 
-    // 3. Clasificar por tipo usando matching por SKU
-    orders = classifyOrders(orders, affiliateRows);
+    // 3. Clasificar por tipo usando matching por GRUPO de producto
+    //    (agrupa todas las variantes físicas bajo un mismo grupo; resuelve falsos
+    //    negativos cuando Simla tiene variantes que el CSV no distingue)
+    orders = classifyOrders(orders, affiliateRows, skuMap);
 
     // 4. Asignar gasto GMV Max
     orders = allocateGMVMax(orders, gmvCampaigns, skuMap);
@@ -158,6 +244,15 @@ router.post('/report', async (req, res) => {
 
     // 6. Resumen global
     const summary = buildSummary(pl);
+
+    // 7. Persistir filas crudas del CSV en tts_affiliate_orders
+    //    (alimenta la pestaña de Muestras para atribuir ventas a los creadores)
+    try {
+      const persisted = persistAffiliateOrders(db, date, affiliateRows, skuMap);
+      console.log(`[TTS] persistidos ${persisted} registros en tts_affiliate_orders para ${date}`);
+    } catch (persistErr) {
+      console.warn('[TTS] error persistiendo affiliate_orders:', persistErr.message);
+    }
 
     res.json({ pl, summary, orders });
   } catch (err) {
@@ -358,9 +453,98 @@ router.get('/history', (req, res) => {
       ORDER BY date ASC, orders DESC
     `).all(from, to);
 
-    res.json({ summary, grupos, affiliates });
+    // Breakdown por (afiliado × video × producto) — desde tts_affiliate_orders.
+    // Una fila por (creator × video). orders_primary cuenta sólo filas isPrimary
+    // (el primer producto del pedido) — necesario para que totalSales del afiliado
+    // sea pedidos únicos cuando un pedido tiene productos de varios videos.
+    const affiliateVideos = db.prepare(`
+      SELECT tiktok_username                                AS creator_name,
+             video_id,
+             COALESCE(MAX(product_name), '')                AS product_name,
+             COALESCE(MAX(grupo), '')                       AS grupo,
+             COUNT(*)                                       AS orders,
+             SUM(CASE WHEN is_primary=1 THEN 1 ELSE 0 END)  AS orders_primary,
+             SUM(CASE WHEN comm_type='paid' THEN 1 ELSE 0 END) AS orders_paid,
+             SUM(CASE WHEN comm_type='org'  THEN 1 ELSE 0 END) AS orders_org,
+             COALESCE(SUM(revenue), 0)                      AS revenue,
+             COALESCE(SUM(commission), 0)                   AS commission
+        FROM tts_affiliate_orders
+       WHERE order_date BETWEEN ? AND ?
+         AND (fully_refunded IS NULL OR fully_refunded = 0)
+         AND (order_status IS NULL OR order_status NOT LIKE '%aptos%')
+         AND tiktok_username IS NOT NULL AND tiktok_username != ''
+       GROUP BY tiktok_username, video_id
+       ORDER BY orders DESC
+    `).all(from, to);
+
+    res.json({ summary, grupos, affiliates, affiliate_videos: affiliateVideos });
   } catch (err) {
     console.error('[TTS /history]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/tts/affiliate-orders/upload ───────────────────────────────
+// Sube un CSV de afiliados (texto en body) y persiste en tts_affiliate_orders.
+// Detecta fechas automáticamente — si el CSV tiene varios días, agrupa y
+// persiste por día (igual que el script bulk-import-tts.js).
+//
+// Body: { csvText: '...contenido del CSV...', filename?: 'opcional para log' }
+// Response: { ok, byDate: {date: count}, totalRows, multiDay }
+router.post('/affiliate-orders/upload', (req, res) => {
+  try {
+    const { csvText, filename } = req.body || {};
+    if (!csvText || typeof csvText !== 'string') {
+      return res.status(400).json({ error: 'csvText requerido (string)' });
+    }
+    const parsed = parseTTSAffiliateCSV(csvText);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const rows = parsed.rows;
+    if (rows.length === 0) return res.status(400).json({ error: 'CSV sin filas válidas' });
+
+    // Agrupar por orderDate (cada fila trae su propia fecha del campo "Fecha/hora de creación")
+    const groups = {};
+    let withoutDate = 0;
+    for (const r of rows) {
+      const d = r.orderDate;
+      if (!d) { withoutDate++; continue; }
+      if (!groups[d]) groups[d] = [];
+      groups[d].push(r);
+    }
+    if (Object.keys(groups).length === 0) {
+      return res.status(400).json({ error: 'No se pudo detectar fechas en las filas del CSV' });
+    }
+
+    const db = getDb();
+    // Mapa SKU → grupo (para resolver grupo por sku)
+    const skusRaw = db.prepare('SELECT sku, grupo FROM skus').all();
+    const skuMap = {};
+    for (const s of skusRaw) skuMap[s.sku] = s;
+
+    const groupDates = Object.keys(groups).sort();
+    // Borrar todos los días afectados y reinsertar (idempotente por archivo).
+    // No envolvemos en transaction exterior porque persistAffiliateOrders ya
+    // abre la suya y este wrapper no soporta transacciones anidadas.
+    const delStmt = db.prepare('DELETE FROM tts_affiliate_orders WHERE order_date = ?');
+    const byDate = {};
+    for (const d of groupDates) delStmt.run(d);
+    for (const d of groupDates) {
+      const inserted = persistAffiliateOrders(db, d, groups[d], skuMap);
+      byDate[d] = inserted;
+    }
+
+    console.log(`[TTS upload] ${filename || '(sin nombre)'}: ${rows.length} filas, ${groupDates.length} días`);
+    res.json({
+      ok: true,
+      filename: filename || null,
+      totalRows: rows.length,
+      withoutDate,
+      multiDay: groupDates.length > 1,
+      byDate,
+      dateRange: { from: groupDates[0], to: groupDates[groupDates.length - 1] },
+    });
+  } catch (err) {
+    console.error('[TTS /affiliate-orders/upload]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

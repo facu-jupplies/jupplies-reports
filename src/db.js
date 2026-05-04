@@ -359,6 +359,117 @@ function initSchema(db) {
   try { db.exec('ALTER TABLE tts_history_grupos ADD COLUMN display_name TEXT'); } catch (_) {}
   try { db.exec('ALTER TABLE tts_history_grupos ADD COLUMN gross_profit REAL DEFAULT 0'); } catch (_) {}
 
+  // Migración: muestras multi-item (varios SKUs enviados en un solo pedido Simla)
+  try { db.exec('ALTER TABLE tts_samples ADD COLUMN all_skus TEXT'); } catch (_) {}
+
+  // ─── Tablas de seguimiento de MUESTRAS TTS ─────────────────────────────
+  // Muestras gratuitas detectadas en Simla (por shopify_tags="Free sample")
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tts_samples (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      sample_type         TEXT NOT NULL DEFAULT 'free',  -- 'free' | 'reimbursable'
+      sent_date           TEXT NOT NULL,                 -- YYYY-MM-DD (createdAt)
+      approved_date       TEXT,                          -- statusUpdatedAt si ya CONFIRMED
+      approved_status     TEXT,                          -- status en el momento de aprobación
+      simla_order_id      TEXT UNIQUE NOT NULL,          -- order.id numérico de Simla
+      simla_order_num     TEXT,                          -- order.number (ej. #TK15612)
+      tiktok_order_id     TEXT,                          -- TikTokOrderID extraído de tags
+      customer_name       TEXT,
+      customer_email      TEXT,
+      customer_phone      TEXT,
+      customer_address    TEXT,
+      shopify_tags_raw    TEXT,                          -- string crudo de customFields.shopify_tags
+      custom_fields_raw   TEXT,                          -- JSON de customFields
+      sku                 TEXT,
+      grupo               TEXT,
+      product_name        TEXT,
+      units               INTEGER DEFAULT 1,
+      cogs                REAL DEFAULT 0,                -- items.purchasePrice * qty
+      shipping_cost       REAL DEFAULT 0,                -- delivery.netCost
+      original_price      REAL DEFAULT 0,                -- items.initialPrice (referencia)
+      refunded_amount     REAL DEFAULT 0,
+      refunded_at         TEXT,
+      tiktok_username     TEXT,                          -- NULL hasta asignar
+      auto_assigned       INTEGER DEFAULT 0,             -- 1 si se asignó por regex o sugerencia auto
+      first_sale_date     TEXT,                          -- cache de primera venta atribuida
+      notes               TEXT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_samples_date   ON tts_samples(sent_date);
+    CREATE INDEX IF NOT EXISTS idx_samples_grupo  ON tts_samples(grupo);
+    CREATE INDEX IF NOT EXISTS idx_samples_handle ON tts_samples(tiktok_username);
+    CREATE INDEX IF NOT EXISTS idx_samples_type   ON tts_samples(sample_type);
+  `);
+
+  // Filas crudas del CSV de afiliados (una fila por producto-pedido)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tts_affiliate_orders (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_date        TEXT NOT NULL,                   -- YYYY-MM-DD
+      csv_order_id      TEXT NOT NULL,                   -- "ID de pedido" del CSV
+      tiktok_username   TEXT NOT NULL,
+      product_name      TEXT,
+      product_id        TEXT,
+      csv_sku_id        TEXT,                            -- "ID de SKU" del CSV (numérico TikTok)
+      sku               TEXT,                            -- SKU nuestro resuelto
+      grupo             TEXT,
+      price             REAL DEFAULT 0,
+      revenue           REAL DEFAULT 0,
+      commission        REAL DEFAULT 0,                  -- commReal + commRealAds
+      comm_type         TEXT,                            -- 'paid' | 'org' | 'none'
+      video_id          TEXT,
+      content_type      TEXT,                            -- 'Vídeo' | 'Escaparate'
+      order_status      TEXT,                            -- 'Pendientes' | 'No aptos' | ...
+      fully_refunded    INTEGER DEFAULT 0,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(csv_order_id, csv_sku_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_affil_date   ON tts_affiliate_orders(order_date);
+    CREATE INDEX IF NOT EXISTS idx_affil_user   ON tts_affiliate_orders(tiktok_username);
+    CREATE INDEX IF NOT EXISTS idx_affil_grupo  ON tts_affiliate_orders(grupo);
+    CREATE INDEX IF NOT EXISTS idx_affil_user_grupo ON tts_affiliate_orders(tiktok_username, grupo);
+  `);
+
+  // Migración: agregar is_primary (1 = primer producto del pedido, 0 = secundario).
+  // Default 1 para compatibilidad con datos viejos donde había 1 fila por pedido.
+  try {
+    const cols = db.prepare("PRAGMA table_info(tts_affiliate_orders)").all();
+    if (!cols.some(c => c.name === 'is_primary')) {
+      db.exec('ALTER TABLE tts_affiliate_orders ADD COLUMN is_primary INTEGER DEFAULT 1');
+      // Para datos viejos: marcar como primary la primer fila por csv_order_id, resto = 0
+      db.exec(`
+        UPDATE tts_affiliate_orders SET is_primary = 0
+         WHERE id NOT IN (
+           SELECT MIN(id) FROM tts_affiliate_orders GROUP BY csv_order_id
+         )
+      `);
+    }
+  } catch (e) {
+    console.warn('[migration is_primary]', e.message);
+  }
+
+  // Mapeo customer Simla → handle TikTok (cacheado)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS creator_mapping (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      simla_customer_name   TEXT,
+      simla_customer_email  TEXT,
+      simla_customer_phone  TEXT,
+      tiktok_username       TEXT NOT NULL,
+      confirmed             INTEGER DEFAULT 0,           -- 1 manual, 0 autosuggested
+      source                TEXT,                        -- 'regex_comment' | 'manual' | 'suggestion'
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(simla_customer_name, tiktok_username)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cm_name  ON creator_mapping(simla_customer_name);
+    CREATE INDEX IF NOT EXISTS idx_cm_phone ON creator_mapping(simla_customer_phone);
+    CREATE INDEX IF NOT EXISTS idx_cm_user  ON creator_mapping(tiktok_username);
+  `);
+
   // Reparar sku_group en ad_spend que quedaron NULL por la migración agresiva anterior.
   // Re-inferir usando campaign_sku_map (mapeos manuales primero) o por nombre de campaña.
   repairAdSpendGroups(db);
@@ -378,6 +489,7 @@ function initSchema(db) {
     ['tts_iva_pct',           '21'],
     ['tts_platform_pct',      '9'],
     ['simla_api_key',         'HLJGMavFx6otUkxIrkW0HAHcNCBMtbzy'],
+    ['sample_attribution_window_days', '90'],
   ];
   for (const [key, value] of defaults) {
     try {
