@@ -1,4 +1,17 @@
 node_modules/
 jupplies.db
+jupplies.db-*
 .claude/
 *.log
+
+# Backups locales con PII de clientes — nunca subir
+backups/
+
+# Archivos temporales del sistema
+.DS_Store
+*.swp
+*.swo
+
+# Variables de entorno
+.env
+.env.local
