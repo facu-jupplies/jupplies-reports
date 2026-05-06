@@ -539,29 +539,37 @@ function ttsmToggleRow(handle) {
 
 function renderAffiliateRow(a) {
   const isExpanded = _samplesState.expanded.has(a.tiktok_username);
-  const receivedSet = new Set(a.skus_received);
-  const soldList = a.skus_sold || [];
+  const receivedList = a.skus_received || [];
+  const soldList     = a.skus_sold     || [];
+  const matchedOnlyMode = _samplesState.matchedOnly;
+
+  // Match a nivel familia (no exact): "BANE-TER-GR" recibido machea con
+  // "BANE-TER-RO" vendido (mismo modelo, distinto color).
+  const isSkuMatched = (skuVendido) =>
+    receivedList.some(rec => matchesGroupFamily(rec, skuVendido));
 
   // ── SKUs recibidos (truncado o completo según expand) ──
-  const recvToShow = isExpanded ? a.skus_received : a.skus_received.slice(0, SKU_TRUNCATE);
+  const recvToShow = isExpanded ? receivedList : receivedList.slice(0, SKU_TRUNCATE);
   const skusRecvHtml = recvToShow.map(sku => renderSkuChip(sku, 'received')).join('');
-  const skuRecvMore = !isExpanded && a.skus_received.length > SKU_TRUNCATE
-    ? `<span style="font-size:10px;color:var(--md);font-weight:600">+${a.skus_received.length - SKU_TRUNCATE}</span>`
+  const skuRecvMore = !isExpanded && receivedList.length > SKU_TRUNCATE
+    ? `<span style="font-size:10px;color:var(--md);font-weight:600">+${receivedList.length - SKU_TRUNCATE}</span>`
     : '';
-  const skusRecvEmpty = a.skus_received.length === 0
+  const skusRecvEmpty = receivedList.length === 0
     ? '<span style="color:var(--md);font-size:11px">—</span>'
     : '';
 
-  // ── SKUs vendidos (verde si match, gris si extra) ──
-  const soldToShow = isExpanded ? soldList : soldList.slice(0, SKU_TRUNCATE);
+  // ── SKUs vendidos: verde = misma familia que recibido, gris = otro producto.
+  // Cuando matchedOnly está activo, ocultamos los grises (no atribuibles).
+  const soldFiltered = matchedOnlyMode ? soldList.filter(isSkuMatched) : soldList;
+  const soldToShow   = isExpanded ? soldFiltered : soldFiltered.slice(0, SKU_TRUNCATE);
   const skusSoldHtml = soldToShow.map(sku => {
-    const matched = receivedSet.has(sku);
+    const matched = isSkuMatched(sku);
     return renderSkuChip(sku, matched ? 'sold_match' : 'sold_extra');
   }).join('');
-  const skuSoldMore = !isExpanded && soldList.length > SKU_TRUNCATE
-    ? `<span style="font-size:10px;color:var(--md);font-weight:600">+${soldList.length - SKU_TRUNCATE}</span>`
+  const skuSoldMore = !isExpanded && soldFiltered.length > SKU_TRUNCATE
+    ? `<span style="font-size:10px;color:var(--md);font-weight:600">+${soldFiltered.length - SKU_TRUNCATE}</span>`
     : '';
-  const skuSoldEmpty = soldList.length === 0
+  const skuSoldEmpty = soldFiltered.length === 0
     ? '<span style="color:var(--md);font-size:11px">—</span>'
     : '';
 
