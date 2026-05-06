@@ -9,8 +9,14 @@ let _samplesState = {
   to:   null,
   affiliatesData: null,
   mappingsData:   null,
-  sort: 'date_desc',
+  // Sort por columna: { col: 'facturacion'|'roas_total'|..., dir: 'asc'|'desc' }
+  // null = default (date_desc)
+  sortCol: null,
+  sortDir: 'desc',
   search: '',
+  // Toggle: cuando ON, oculta afiliados con orders_matched=0 y todas las
+  // métricas T se reemplazan por las matched (ventas del grupo de muestra).
+  matchedOnly: false,
   allHandles: [],  // lista de todos los handles conocidos para autocomplete
   expanded: new Set(),  // handles de filas expandidas inline
   // Filtros del panel B (mapeos)
@@ -368,23 +374,19 @@ function renderAffiliatesPanel(d) {
   </div>
 
   <!-- Controles -->
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
     <div class="section-title" style="margin:0">Afiliados con muestras · ${d.affiliates.length}</div>
-    <div style="display:flex;gap:6px;align-items:center">
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <input type="text" placeholder="Buscar..." id="ttsm-search"
              value="${_samplesState.search}" oninput="_samplesState.search=this.value;rerenderAffiliatesTable()"
              style="padding:5px 10px;font-size:12px;border:1px solid var(--lt2);border-radius:4px;width:180px">
-      <label style="font-size:11px;color:var(--md)">Ordenar:</label>
-      <select onchange="_samplesState.sort=this.value;rerenderAffiliatesTable()"
-              style="padding:4px 8px;font-size:12px;border:1px solid var(--lt2);border-radius:4px">
-        <option value="date_desc"    ${_samplesState.sort==='date_desc'?'selected':''}>Fecha (reciente)</option>
-        <option value="date_asc"     ${_samplesState.sort==='date_asc'?'selected':''}>Fecha (antigua)</option>
-        <option value="revenue_desc" ${_samplesState.sort==='revenue_desc'?'selected':''}>Facturación</option>
-        <option value="orders_desc"  ${_samplesState.sort==='orders_desc'?'selected':''}>Pedidos</option>
-        <option value="samples_desc" ${_samplesState.sort==='samples_desc'?'selected':''}>Muestras</option>
-        <option value="roi_desc"     ${_samplesState.sort==='roi_desc'?'selected':''}>ROIA</option>
-        <option value="handle"       ${_samplesState.sort==='handle'?'selected':''}>Handle (A-Z)</option>
-      </select>
+      <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;padding:4px 10px;border:1px solid var(--lt2);border-radius:4px;background:${_samplesState.matchedOnly ? 'rgba(33,163,102,.12)' : 'var(--wh)'};font-weight:${_samplesState.matchedOnly ? '600' : '400'}"
+             title="Filtra afiliados sin ventas matched (mismo grupo familia que la muestra). Las cifras pasan a mostrar sólo las ventas matched.">
+        <input type="checkbox" ${_samplesState.matchedOnly ? 'checked' : ''}
+               onchange="_samplesState.matchedOnly=this.checked;rerenderAffiliatesTable()"
+               style="margin:0">
+        🎯 Solo coincidencia
+      </label>
     </div>
   </div>
 
@@ -397,72 +399,112 @@ function rerenderAffiliatesTable() {
   if (wrap) wrap.innerHTML = renderAffiliatesTable(_samplesState.affiliatesData.affiliates);
 }
 
-function sortAffiliates(rows, mode) {
+// Sort por click en header de columna. Click toggle asc/desc, doble click vuelve a default.
+function ttsmSort(col) {
+  if (_samplesState.sortCol === col) {
+    _samplesState.sortDir = _samplesState.sortDir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _samplesState.sortCol = col;
+    _samplesState.sortDir = 'desc';
+  }
+  rerenderAffiliatesTable();
+}
+
+// Devuelve el valor a comparar para una columna dada.
+function _affilSortValue(a, col) {
+  switch (col) {
+    case 'date':       return a.first_sample_date || '';
+    case 'handle':     return (a.tiktok_username || '').toLowerCase();
+    case 'pedidos':    return _samplesState.matchedOnly ? a.orders_matched      : a.orders;
+    case 'videos':     return _samplesState.matchedOnly ? a.videos_matched      : a.videos;
+    case 'facturacion':return _samplesState.matchedOnly ? a.facturacion_matched : a.facturacion;
+    case 'inversion':  return a.inversion;
+    case 'roas':       {
+      const v = _samplesState.matchedOnly ? a.roas_matched : a.roas_total;
+      return v == null ? -Infinity : v;
+    }
+    case 'days':       return a.days_since_last_sample == null ? -Infinity : a.days_since_last_sample;
+    default:           return a.first_sample_date || '';
+  }
+}
+
+function sortAffiliates(rows) {
+  const col = _samplesState.sortCol || 'date';
+  const dir = _samplesState.sortDir;
   const copy = rows.slice();
   const byHandle = (a, b) => (a.tiktok_username || '').localeCompare(b.tiktok_username || '');
-  switch (mode) {
-    case 'date_asc':     copy.sort((a,b) => (a.first_sample_date||'').localeCompare(b.first_sample_date||'') || byHandle(a,b)); break;
-    case 'revenue_desc': copy.sort((a,b) => b.facturacion - a.facturacion || byHandle(a,b)); break;
-    case 'orders_desc':  copy.sort((a,b) => b.orders - a.orders || byHandle(a,b)); break;
-    case 'samples_desc': copy.sort((a,b) => b.samples_received - a.samples_received || byHandle(a,b)); break;
-    case 'roi_desc':
-      copy.sort((a,b) => {
-        const ra = a.roia == null ? -Infinity : a.roia;
-        const rb = b.roia == null ? -Infinity : b.roia;
-        return rb - ra || byHandle(a,b);
-      });
-      break;
-    case 'handle': copy.sort(byHandle); break;
-    default: copy.sort((a,b) => (b.first_sample_date||'').localeCompare(a.first_sample_date||'') || byHandle(a,b));
-  }
+  copy.sort((a, b) => {
+    const va = _affilSortValue(a, col);
+    const vb = _affilSortValue(b, col);
+    let cmp;
+    if (typeof va === 'string') cmp = va.localeCompare(vb);
+    else                        cmp = (va || 0) - (vb || 0);
+    if (cmp === 0) return byHandle(a, b);
+    return dir === 'desc' ? -cmp : cmp;
+  });
   return copy;
 }
 
 function filterAffiliates(rows, q) {
   const query = (q || '').toLowerCase().trim();
-  if (!query) return rows;
-  return rows.filter(a =>
-    (a.tiktok_username || '').toLowerCase().includes(query) ||
-    (a.customer_name   || '').toLowerCase().includes(query) ||
-    a.skus_received.some(s => (s || '').toLowerCase().includes(query)) ||
-    (a.skus_sold || []).some(s => (s || '').toLowerCase().includes(query))
-  );
+  let out = rows;
+  // Toggle "Solo coincidencia": esconde afiliados sin ventas matched
+  if (_samplesState.matchedOnly) {
+    out = out.filter(a => (a.orders_matched || 0) > 0);
+  }
+  if (query) {
+    out = out.filter(a =>
+      (a.tiktok_username || '').toLowerCase().includes(query) ||
+      (a.customer_name   || '').toLowerCase().includes(query) ||
+      a.skus_received.some(s => (s || '').toLowerCase().includes(query)) ||
+      (a.skus_sold || []).some(s => (s || '').toLowerCase().includes(query))
+    );
+  }
+  return out;
+}
+
+// Renderiza una flecha en el header indicando si la columna está activa
+function _sortArrow(col) {
+  if (_samplesState.sortCol !== col) return '<span style="color:var(--md);opacity:.4">⇅</span>';
+  return _samplesState.sortDir === 'desc' ? '▼' : '▲';
+}
+
+// Helper: formatea ROAS como Nx con color según valor
+function ttsmRoas(v) {
+  if (v == null) return '—';
+  return v.toFixed(2).replace('.', ',') + 'x';
+}
+function _roasStyle(v) {
+  if (v == null) return 'color:var(--md)';
+  if (v >= 5)  return 'color:var(--gr);font-weight:700';
+  if (v >= 1)  return 'color:var(--bl);font-weight:600';
+  return 'color:var(--re);font-weight:600';
 }
 
 function renderAffiliatesTable(rows) {
   if (!rows || rows.length === 0) return '<div style="padding:40px;text-align:center;color:var(--md)">Sin afiliados</div>';
   const filtered = filterAffiliates(rows, _samplesState.search);
-  const sorted = sortAffiliates(filtered, _samplesState.sort);
+  const sorted = sortAffiliates(filtered);
+
+  // Header clickeable: cada th invoca ttsmSort(col).
+  // Cuando matchedOnly está activo, las columnas T/C colapsan a sólo C
+  // (porque "matched only" significa que estás viendo solo esa cifra).
+  const matchedOnly = _samplesState.matchedOnly;
+  const thStyle = 'cursor:pointer;user-select:none';
 
   return `
   <table style="width:100%;table-layout:auto">
-    <colgroup>
-      <col style="width:78px">
-      <col style="width:170px">
-      <col style="width:170px">
-      <col style="width:170px">
-      <col style="width:80px">
-      <col style="width:110px">
-      <col style="width:55px">
-      <col style="width:100px">
-      <col style="width:90px">
-      <col style="width:95px">
-      <col style="width:80px">
-      <col style="width:72px">
-    </colgroup>
     <thead>
       <tr>
-        <th>Fecha</th>
-        <th>Afiliado</th>
+        <th style="${thStyle}" onclick="ttsmSort('handle')">Afiliado ${_sortArrow('handle')}</th>
         <th>SKUs recibidos</th>
         <th>SKUs vendidos</th>
-        <th class="text-right">Costo</th>
-        <th class="text-right">Pedidos</th>
-        <th class="text-right">Vids</th>
-        <th class="text-right">Facturación</th>
-        <th class="text-right">Comisión</th>
-        <th class="text-right">Inversión</th>
-        <th class="text-right" title="Retorno sobre la Inversión del Afiliado: (Facturación − Inversión) / Inversión">ROIA</th>
+        <th class="text-right" style="${thStyle}" onclick="ttsmSort('pedidos')" title="Pedidos en el período. Cuando 'Solo coincidencia' está activo, sólo cuenta los del grupo de la muestra.">Pedidos ${_sortArrow('pedidos')}</th>
+        <th class="text-right" style="${thStyle}" onclick="ttsmSort('videos')" title="Videos distintos del afiliado">Vids ${_sortArrow('videos')}</th>
+        <th class="text-right" style="${thStyle}" onclick="ttsmSort('facturacion')" title="Facturación: ${matchedOnly ? 'sólo ventas matched' : 'total / matched (entre paréntesis las del grupo de muestra)'}">Facturación ${_sortArrow('facturacion')}</th>
+        <th class="text-right" style="${thStyle}" onclick="ttsmSort('inversion')" title="Costo muestras (cogs + envío)">Inversión ${_sortArrow('inversion')}</th>
+        <th class="text-right" style="${thStyle}" onclick="ttsmSort('roas')" title="ROAS = Facturación / Inversión. ${matchedOnly ? 'Sólo ventas matched.' : 'Total y matched.'}">ROAS ${_sortArrow('roas')}</th>
+        <th class="text-right" style="${thStyle}" onclick="ttsmSort('days')" title="Días desde el último envío de muestra. Útil para evaluar afiliados sin ventas.">Envío ${_sortArrow('days')}</th>
         <th></th>
       </tr>
     </thead>
@@ -523,15 +565,8 @@ function renderAffiliateRow(a) {
     ? '<span style="color:var(--md);font-size:11px">—</span>'
     : '';
 
-  // ROIA neto sin contar comisión como inversión.
-  const inversionA   = a.samples_cost || 0;
-  const benefNetoA   = (a.facturacion || 0) - (a.commission || 0) - inversionA;
-  const roiaNetA     = inversionA > 0 && a.orders > 0
-    ? Math.round((benefNetoA / inversionA) * 1000) / 10
-    : null;
-  const roiaStyle = roiaNetA == null ? 'color:var(--md)' :
-                    (roiaNetA >= 50 ? 'color:var(--gr);font-weight:700' :
-                    (roiaNetA >= 0  ? 'color:var(--bl);font-weight:600' : 'color:var(--re);font-weight:700'));
+  const matchedOnly = _samplesState.matchedOnly;
+  const inversionA  = a.inversion || a.samples_cost || 0;
 
   const toggleBtn = `
     <div style="display:flex;gap:3px;justify-content:flex-end">
@@ -549,45 +584,85 @@ function renderAffiliateRow(a) {
       </button>
     </div>`;
 
-  // Si no tiene ventas atribuidas, fila colapsada con mensaje claro.
+  // Bloque afiliado: handle + customer + fecha de envío en pequeño
+  const afilCell = `
+    <td>
+      <div style="font-weight:600;font-family:'Poppins',sans-serif">@${a.tiktok_username}</div>
+      ${a.customer_name ? `<div style="font-size:11px;color:var(--md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.customer_name}</div>` : ''}
+      <div style="font-size:10px;color:var(--md)">📦 ${ttsmDate(a.first_sample_date)}${a.samples_received > 1 ? ` · ${a.samples_received} muestras` : ''}</div>
+    </td>`;
+
+  // Días desde el envío. En color rojo si pasaron muchos sin venta.
+  const days = a.days_since_last_sample;
+  const daysCell = days == null
+    ? '<span style="color:var(--md)">—</span>'
+    : a.orders === 0 && days >= 7
+      ? `<span style="color:var(--re);font-weight:600" title="Sin ventas tras ${days} días — revisar si el afiliado está activo">${days}d ⚠</span>`
+      : `<span style="color:var(--md)">${days}d</span>`;
+
+  // Si no tiene ventas atribuidas → fila colapsada con info clave: # videos + días desde envío
   if (a.orders === 0) {
     return `
     <tr style="background:rgba(0,0,0,.015)">
-      <td style="font-size:11px;color:var(--md);white-space:nowrap">${ttsmDate(a.first_sample_date)}</td>
-      <td>
-        <div style="font-weight:600;font-family:'Poppins',sans-serif">@${a.tiktok_username}</div>
-        ${a.customer_name ? `<div style="font-size:11px;color:var(--md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.customer_name}</div>` : ''}
-      </td>
+      ${afilCell}
       <td style="vertical-align:top">${skusRecvHtml}${skuRecvMore}${skusRecvEmpty}</td>
-      <td colspan="7" style="font-size:11px;color:var(--md);font-style:italic">
-        ⏳ Esperando ventas atribuidas · costo muestras: ${ttsmEur(a.samples_cost)}
+      <td colspan="5" style="font-size:11px;color:var(--md);font-style:italic">
+        ⏳ Esperando ventas atribuidas · ${a.videos || 0} video${a.videos === 1 ? '' : 's'} hechos · costo muestras: ${ttsmEur(inversionA)}
       </td>
+      <td class="text-right" style="font-size:11px">${daysCell}</td>
       <td class="text-right">${toggleBtn}</td>
     </tr>`;
   }
 
-  // Con ventas: fila completa
-  const pedidosCell = `<strong>${a.orders}</strong>
-       <small style="color:var(--md);font-size:10px">
+  // Pedidos: total con split paid/org. Si matchedOnly, solo la cifra matched.
+  const pedidosCell = matchedOnly
+    ? `<strong>${a.orders_matched}</strong>`
+    : `<strong>${a.orders}</strong>${a.orders_matched < a.orders
+        ? ` <small style="color:var(--gr);font-size:10px" title="Ventas matched (mismo grupo de muestra)">· ${a.orders_matched}m</small>`
+        : ''}
+       <div style="font-size:9px;color:var(--md)">
          ${a.orders_paid > 0 ? a.orders_paid + 'p' : ''}${a.orders_paid>0 && a.orders_org>0 ? '/' : ''}${a.orders_org > 0 ? a.orders_org + 'o' : ''}
-       </small>`;
+       </div>`;
+
+  // Videos: total / matched
+  const videosCell = matchedOnly
+    ? `<strong>${a.videos_matched}</strong>`
+    : a.videos_matched < a.videos
+      ? `<strong>${a.videos}</strong> <small style="color:var(--gr);font-size:10px">·${a.videos_matched}m</small>`
+      : `<strong>${a.videos}</strong>`;
+
+  // Facturación: total / matched
+  const factTotal   = a.facturacion;
+  const factMatched = a.facturacion_matched;
+  const facturacionCell = matchedOnly
+    ? `<strong>${ttsmEur(factMatched)}</strong>`
+    : factMatched < factTotal
+      ? `<strong>${ttsmEur(factTotal)}</strong>
+         <div style="font-size:10px;color:var(--gr);font-weight:600" title="Facturación matched (grupo muestra)">${ttsmEur(factMatched)} match</div>`
+      : `<strong>${ttsmEur(factTotal)}</strong>`;
+
+  // ROAS: total / matched. Estilo según valor.
+  const roasT = a.roas_total;
+  const roasM = a.roas_matched;
+  const roasMain  = matchedOnly ? roasM : roasT;
+  const roasCell = matchedOnly
+    ? `<span style="${_roasStyle(roasM)}">${ttsmRoas(roasM)}</span>`
+    : `<span style="${_roasStyle(roasT)}">${ttsmRoas(roasT)}</span>${
+        (roasM != null && roasT != null && Math.abs(roasM - roasT) > 0.01)
+          ? `<div style="font-size:10px;color:var(--gr)" title="ROAS matched (grupo muestra)">${ttsmRoas(roasM)} match</div>`
+          : ''}`;
 
   return `
   <tr>
-    <td style="font-size:11px;color:var(--md);white-space:nowrap">${ttsmDate(a.first_sample_date)}</td>
-    <td>
-      <div style="font-weight:600;font-family:'Poppins',sans-serif">@${a.tiktok_username}</div>
-      ${a.customer_name ? `<div style="font-size:11px;color:var(--md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.customer_name}</div>` : ''}
-    </td>
+    ${afilCell}
     <td style="vertical-align:top">${skusRecvHtml}${skuRecvMore}${skusRecvEmpty}</td>
     <td style="vertical-align:top">${skusSoldHtml}${skuSoldMore}${skuSoldEmpty}</td>
-    <td class="text-right">${ttsmEur(a.samples_cost)}</td>
     <td class="text-right">${pedidosCell}</td>
-    <td class="text-right">${a.videos || '<span style="color:var(--md)">—</span>'}</td>
-    <td class="text-right"><strong>${ttsmEur(a.facturacion)}</strong></td>
-    <td class="text-right">${ttsmEur(a.commission)}</td>
+    <td class="text-right">${videosCell}</td>
+    <td class="text-right">${facturacionCell}</td>
     <td class="text-right">${ttsmEur(inversionA)}</td>
-    <td class="text-right" style="${roiaStyle}">${roiaNetA == null ? '—' : ttsmPct(roiaNetA)}</td>
+    <td class="text-right">${roasCell}</td>
+    <td class="text-right" style="font-size:11px">${daysCell}</td>
     <td class="text-right">${toggleBtn}</td>
   </tr>`;
 }

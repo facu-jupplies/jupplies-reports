@@ -86,25 +86,59 @@ router.get('/affiliates', (req, res) => {
     `).get(from, to);
 
     // 3. Ventas en el período, agrupadas por handle
-    const salesRows = db.prepare(`
-      SELECT tiktok_username,
-             COUNT(*)                                                  AS orders,
-             COALESCE(SUM(revenue), 0)                                 AS revenue,
-             COALESCE(SUM(commission), 0)                              AS commission,
-             COUNT(DISTINCT video_id)                                  AS videos,
-             SUM(CASE WHEN comm_type='paid' THEN 1 ELSE 0 END)         AS orders_paid,
-             SUM(CASE WHEN comm_type='org'  THEN 1 ELSE 0 END)         AS orders_org,
-             GROUP_CONCAT(DISTINCT sku)                                AS skus_sold,
-             GROUP_CONCAT(DISTINCT grupo)                              AS grupos_sold
-      FROM tts_affiliate_orders
-      WHERE order_date BETWEEN ? AND ?
-        AND (order_status IS NULL OR order_status NOT LIKE '%aptos%')
-        AND (fully_refunded IS NULL OR fully_refunded = 0)
-      GROUP BY tiktok_username
-    `).all(from, to);
+    // Traemos las filas crudas (no agregadas) sólo de los handles con muestras del
+    // período. Necesitamos cada fila para separar matched / no-matched a nivel
+    // grupo familia (matchesGroupFamily), lógica que SQL no puede hacer.
+    const handlesArr = samplesRows.map(r => r.tiktok_username).filter(Boolean);
+    const placeholders = handlesArr.map(() => '?').join(',');
+    const rawSales = handlesArr.length === 0 ? [] : db.prepare(`
+      SELECT tiktok_username, sku, grupo, revenue, commission, comm_type, video_id
+        FROM tts_affiliate_orders
+       WHERE order_date BETWEEN ? AND ?
+         AND tiktok_username IN (${placeholders})
+         AND (order_status IS NULL OR order_status NOT LIKE '%aptos%')
+         AND (fully_refunded IS NULL OR fully_refunded = 0)
+    `).all(from, to, ...handlesArr);
+
+    // Agregamos en JS por (handle), separando matched vs no-matched.
+    // Match: el grupo de la venta pertenece a la familia de algún grupo recibido
+    // por ESE handle en el período (matchesGroupFamily ignora colores/variantes).
+    const handleReceivedGrupos = {};
+    for (const sr of samplesRows) {
+      handleReceivedGrupos[sr.tiktok_username] =
+        (sr.grupos_received || '').split(',').map(g => g.trim()).filter(Boolean);
+    }
 
     const salesByHandle = {};
-    for (const s of salesRows) salesByHandle[s.tiktok_username] = s;
+    for (const sale of rawSales) {
+      const h = sale.tiktok_username;
+      if (!salesByHandle[h]) salesByHandle[h] = {
+        orders: 0, revenue: 0, commission: 0,
+        orders_matched: 0, revenue_matched: 0, commission_matched: 0,
+        orders_paid: 0, orders_org: 0,
+        videos_set: new Set(),
+        videos_matched_set: new Set(),
+        skus_sold: new Set(), grupos_sold: new Set(),
+      };
+      const agg = salesByHandle[h];
+      const isMatched = (handleReceivedGrupos[h] || []).some(rg => matchesGroupFamily(rg, sale.grupo));
+
+      agg.orders     += 1;
+      agg.revenue    += sale.revenue || 0;
+      agg.commission += sale.commission || 0;
+      if      (sale.comm_type === 'paid') agg.orders_paid += 1;
+      else if (sale.comm_type === 'org')  agg.orders_org  += 1;
+      if (sale.video_id) agg.videos_set.add(sale.video_id);
+      if (sale.sku)   agg.skus_sold.add(sale.sku);
+      if (sale.grupo) agg.grupos_sold.add(sale.grupo);
+
+      if (isMatched) {
+        agg.orders_matched     += 1;
+        agg.revenue_matched    += sale.revenue || 0;
+        agg.commission_matched += sale.commission || 0;
+        if (sale.video_id) agg.videos_matched_set.add(sale.video_id);
+      }
+    }
 
     // 4. Mapa handle → customer_name desde creator_mapping (fallback: nombre de la muestra)
     const handleToName = {};
@@ -122,13 +156,25 @@ router.get('/affiliates', (req, res) => {
       }
     }
 
-    // 5. Construir lista de afiliados (solo los que RECIBIERON muestras)
+    // 5. Construir lista de afiliados (solo los que RECIBIERON muestras en el período).
     //
-    // ROIA = Retorno sobre la Inversión del Afiliado
-    //   inversion = costo_muestra (cogs+envío) + comisiones pagadas al afiliado
-    //   ROIA (%)  = (facturacion − inversion) / inversion × 100
-    //   — positivo: el afiliado te devuelve más de lo que costó
-    //   — negativo: el afiliado te costó más de lo que te hizo facturar
+    // Métricas cada una en versión total y matched:
+    //   - facturación / comisión / orders / videos
+    //   - matched = sólo ventas de productos del mismo grupo familia que la muestra
+    //
+    // ROAS = facturación / inversión (bruto, sin descontar comisión).
+    //   inversion = costo muestra (cogs+envío). NO incluye comisiones porque
+    //   la comisión sale del propio revenue del pedido, no es capital extra.
+    //
+    // dias_desde_envio: días entre la última muestra enviada y hoy. Útil para
+    //   afiliados sin ventas — saber hace cuánto se mandó la muestra.
+    const todayDateStr = new Date().toISOString().slice(0, 10);
+    const dayDiff = (a, b) => {
+      if (!a || !b) return null;
+      const ms = new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z');
+      return Math.round(ms / 86400000);
+    };
+
     const affiliates = samplesRows.map(s => {
       const h = s.tiktok_username;
       const sales = salesByHandle[h] || {};
@@ -136,44 +182,64 @@ router.get('/affiliates', (req, res) => {
         || (s.customer_names || '').split(',')[0]
         || null;
 
-      const facturacion = sales.revenue    || 0;
-      const commission  = sales.commission || 0;
-      const orders      = sales.orders     || 0;
-      const samplesCost = s.samples_cost   || 0;
+      const facturacion         = sales.revenue              || 0;
+      const facturacionMatched  = sales.revenue_matched      || 0;
+      const commission          = sales.commission           || 0;
+      const commissionMatched   = sales.commission_matched   || 0;
+      const orders              = sales.orders               || 0;
+      const ordersMatched       = sales.orders_matched       || 0;
+      const samplesCost         = s.samples_cost             || 0;
+      const videos              = sales.videos_set?.size     || 0;
+      const videosMatched       = sales.videos_matched_set?.size || 0;
 
-      // Inversión total en el afiliado: muestra (cogs+envío) + comisiones pagadas
-      const inversionTotal = samplesCost + commission;
-      // ROIA
-      const roia = inversionTotal > 0
-        ? round(((facturacion - inversionTotal) / inversionTotal) * 100, 1)
-        : null;
+      // ROAS bruto = facturación / inversión muestras
+      const roasTotal   = samplesCost > 0 ? round(facturacion        / samplesCost, 2) : null;
+      const roasMatched = samplesCost > 0 ? round(facturacionMatched / samplesCost, 2) : null;
 
       // SKUs recibidos: concatenación de all_skus, deduplicado
       const skusReceivedSet = new Set(
         (s.skus_received_raw || '').split(',').map(x => (x || '').trim()).filter(Boolean)
       );
 
+      const lastSampleDate = s.last_sample_date;
+      const daysSinceLast  = dayDiff(lastSampleDate, todayDateStr);
+
       return {
         tiktok_username:   h,
         customer_name:     customerName,
         customer_phone:    handleToName[h]?.phone || null,
         first_sample_date: s.first_sample_date,
-        last_sample_date:  s.last_sample_date,
+        last_sample_date:  lastSampleDate,
+        days_since_last_sample: daysSinceLast,
         samples_received:  s.samples_received || 0,
         units_received:    s.units_received   || 0,
         samples_cost:      round(samplesCost),
         skus_received:     [...skusReceivedSet],
         grupos_received:   (s.grupos_received || '').split(',').filter(Boolean),
+        // Total
         orders,
         orders_paid:       sales.orders_paid || 0,
         orders_org:        sales.orders_org  || 0,
-        videos:            sales.videos || 0,
+        videos,
         facturacion:       round(facturacion),
         commission:        round(commission),
-        skus_sold:         (sales.skus_sold   || '').split(',').filter(Boolean),
-        grupos_sold:       (sales.grupos_sold || '').split(',').filter(Boolean),
-        inversion_total:   round(inversionTotal),
-        roia,
+        // Matched (sólo ventas del grupo familia recibido)
+        orders_matched:    ordersMatched,
+        videos_matched:    videosMatched,
+        facturacion_matched: round(facturacionMatched),
+        commission_matched:  round(commissionMatched),
+        // SKUs vendidos
+        skus_sold:         [...(sales.skus_sold   || [])],
+        grupos_sold:       [...(sales.grupos_sold || [])],
+        // Inversión + ROAS
+        inversion:         round(samplesCost),  // sólo muestras (out-of-pocket)
+        roas_total:        roasTotal,
+        roas_matched:      roasMatched,
+        // Compat con código viejo
+        inversion_total:   round(samplesCost + commission),
+        roia:              samplesCost > 0
+          ? round(((facturacion - commission - samplesCost) / samplesCost) * 100, 1)
+          : null,
       };
     });
 
