@@ -600,15 +600,22 @@ function renderAffiliateRow(a) {
       ? `<span style="color:var(--re);font-weight:600" title="Sin ventas tras ${days} días — revisar si el afiliado está activo">${days}d ⚠</span>`
       : `<span style="color:var(--md)">${days}d</span>`;
 
-  // Si no tiene ventas atribuidas → fila colapsada con info clave: # videos + días desde envío
+  // Si no tiene ventas atribuidas: misma estructura de columnas que las filas
+  // con datos (sin colspan). Cada celda muestra "—" o el dato relevante para
+  // mantener alineación visual con el resto de la tabla.
   if (a.orders === 0) {
+    const dash = '<span style="color:var(--md)">—</span>';
+    const waitingChip = `<span style="color:var(--md);font-size:11px;font-style:italic" title="Esperando ventas atribuidas en el período">⏳ esperando</span>`;
     return `
     <tr style="background:rgba(0,0,0,.015)">
       ${afilCell}
       <td style="vertical-align:top">${skusRecvHtml}${skuRecvMore}${skusRecvEmpty}</td>
-      <td colspan="5" style="font-size:11px;color:var(--md);font-style:italic">
-        ⏳ Esperando ventas atribuidas · ${a.videos || 0} video${a.videos === 1 ? '' : 's'} hechos · costo muestras: ${ttsmEur(inversionA)}
-      </td>
+      <td style="vertical-align:top">${dash}</td>
+      <td class="text-right">${waitingChip}</td>
+      <td class="text-right">${a.videos > 0 ? `<strong>${a.videos}</strong>` : dash}</td>
+      <td class="text-right">${dash}</td>
+      <td class="text-right">${ttsmEur(inversionA)}</td>
+      <td class="text-right">${dash}</td>
       <td class="text-right" style="font-size:11px">${daysCell}</td>
       <td class="text-right">${toggleBtn}</td>
     </tr>`;
